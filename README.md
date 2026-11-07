@@ -156,13 +156,21 @@ Set `BETTER_AUTH_SECRET` (32+ random characters) and `APP_URL` to the production
    [{ "AllowedOrigins": ["https://your-app.vercel.app"], "AllowedMethods": ["PUT", "GET"], "AllowedHeaders": ["content-type"], "MaxAgeSeconds": 3600 }]
    ```
 
-### 5. Resend
+### 4b. Or: store files in Postgres (no R2)
+
+Set `STORAGE_DRIVER=db` (the default in production when no R2 bucket is configured). Uploads are stored as `bytea` in `stored_objects` behind the same short-lived signed URLs. Files are capped at 4 MB each (Vercel's request limit); large phone photos are downscaled in the browser first. Suitable for a single family on Neon's free tier.
+
+### 5. Email: SMTP or Resend
+
+With `SMTP_HOST` set, email goes over SMTP (`SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_SECURE`, `EMAIL_FROM`); otherwise Resend is used.
+
+For Resend:
 
 Verify your sending domain, then set `RESEND_API_KEY` and `EMAIL_FROM`. Every send is recorded in `email_delivery_logs`. Weekly reports are unique per (student, week) and per recipient, so cron retries never double-send. Failed deliveries can be retried from the Reports page or by cron.
 
 ### 6. Vercel
 
-1. Import the repository. The framework is detected as Next.js.
+1. Import the repository. The framework is detected as Next.js. The build command `npm run vercel-build` runs migrations and the reference seed before `next build`. `vercel.json` pins functions to `sin1` (Singapore) next to the database.
 2. Add all environment variables from `.env.example`, including a random `CRON_SECRET`.
 3. Deploy. `vercel.json` registers two Hobby-compatible daily crons:
    - `/api/cron/reports` runs at 13:30 UTC (19:00 IST). It generates and emails reports for families whose scheduled day and time has passed, then retries failed deliveries.
