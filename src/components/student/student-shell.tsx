@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import { BarChart3, BookOpenCheck, Flame, Gift, Home, MessageCircleHeart, Sparkles, Zap } from "lucide-react";
 import { Logo } from "@/components/shared/logo";
+import { StateGate } from "@/components/shared/state-gate";
 import { Mascot } from "@/components/shared/mascot";
 import { RoleSwitcher } from "@/components/shared/role-switcher";
 import { CelebrationHost } from "@/components/shared/celebration";
@@ -107,7 +108,7 @@ export function StudentShell({ children }: { children: React.ReactNode }) {
           </div>
         </aside>
 
-        <main className={cn("min-w-0 flex-1 pb-28 pt-5 lg:pb-10 lg:pt-6", fullBleed && "pb-24")}>{children}</main>
+        <main className={cn("min-w-0 flex-1 pb-28 pt-5 lg:pb-10 lg:pt-6", fullBleed && "pb-24")}><StateGate>{children}</StateGate></main>
       </div>
 
       {/* Mobile bottom nav */}

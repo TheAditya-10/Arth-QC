@@ -1,7 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { ArrowLeftRight, GraduationCap, RotateCcw, Users } from "lucide-react";
+import { Check, ChevronDown, GraduationCap, LogOut, UserRound } from "lucide-react";
 import { toast } from "sonner";
 import {
   DropdownMenu,
@@ -12,43 +11,59 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
-import { settingsService } from "@/lib/services";
+import { settingsService } from "@/lib/client";
+import { setActiveStudent, useStore } from "@/lib/client/store";
 import type { Role } from "@/types";
-import { cn } from "@/lib/utils";
+import { cn, initials } from "@/lib/utils";
 
-/** Demo-only role selector: switches between student and parent experiences. No real auth. */
-export function RoleSwitcher({ current, compact, className }: { current: Role; compact?: boolean; className?: string }) {
-  const router = useRouter();
-  const go = (role: Role) => {
-    settingsService.setDemoRole(role);
-    router.push(role === "student" ? "/student" : "/parent");
-  };
+/** Account menu: who is signed in, student switcher (parents with several children) and sign out. */
+export function AccountMenu({ current, compact, className }: { current: Role; compact?: boolean; className?: string }) {
+  const viewer = useStore((db) => db.viewer);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size={compact ? "icon" : "sm"} className={cn("gap-2", className)} aria-label="Switch demo role">
-          <ArrowLeftRight />
-          {!compact && <span>Demo: {current === "student" ? "Student" : "Parent"}</span>}
+        <Button variant="outline" size={compact ? "icon" : "sm"} className={cn("gap-2", className)} aria-label="Account menu">
+          {compact ? <UserRound /> : (
+            <>
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-sun text-[11px] font-bold text-indigo">{viewer ? initials(viewer.name) : ""}</span>
+              <span className="max-w-[10rem] truncate">{viewer?.name ?? "Account"}</span>
+              <ChevronDown className="opacity-60" />
+            </>
+          )}
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-56">
-        <DropdownMenuLabel>Switch demo view</DropdownMenuLabel>
-        <DropdownMenuItem onSelect={() => go("student")} className={current === "student" ? "bg-secondary" : ""}>
-          <GraduationCap /> Student view
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => go("parent")} className={current === "parent" ? "bg-secondary" : ""}>
-          <Users /> Parent view
-        </DropdownMenuItem>
+      <DropdownMenuContent align="end" className="w-60">
+        <DropdownMenuLabel>{current === "student" ? "Student account" : "Parent account"}</DropdownMenuLabel>
+        <div className="px-2 pb-2 text-sm">
+          <p className="font-semibold">{viewer?.name}</p>
+          <p className="truncate text-xs text-muted-foreground">{current === "parent" ? viewer?.email : viewer?.familyName}</p>
+        </div>
+        {current === "parent" && viewer && viewer.students.length > 1 && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel>Viewing student</DropdownMenuLabel>
+            {viewer.students.map((s) => (
+              <DropdownMenuItem
+                key={s.id}
+                onSelect={() => {
+                  if (s.id === viewer.activeStudentId) return;
+                  void setActiveStudent(s.id).then(() => toast.success(`Now viewing ${s.name}`));
+                }}
+              >
+                <GraduationCap /> <span className="flex-1">{s.name}</span>
+                {s.id === viewer.activeStudentId && <Check />}
+              </DropdownMenuItem>
+            ))}
+          </>
+        )}
         <DropdownMenuSeparator />
-        <DropdownMenuItem
-          onSelect={async () => {
-            await settingsService.resetDemoData();
-            toast.success("Demo data reset", { description: "All mock data is back to its starting state." });
-          }}
-        >
-          <RotateCcw /> Reset demo data
+        <DropdownMenuItem onSelect={() => void settingsService.signOut()}>
+          <LogOut /> Sign out
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
 }
+
+/** @deprecated Phase 1 name, kept so existing shells keep working. */
+export const RoleSwitcher = AccountMenu;

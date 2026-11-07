@@ -3,7 +3,7 @@
 import { motion } from "framer-motion";
 import { Check, Loader2 } from "lucide-react";
 import { Mascot } from "@/components/shared/mascot";
-import { EVALUATION_STAGES } from "@/lib/services/submission.service";
+import { EVALUATION_STAGES } from "@/lib/client/submission.service";
 import { usePauseCelebrations } from "@/components/shared/celebration";
 import { cn } from "@/lib/utils";
 

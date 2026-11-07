@@ -13,7 +13,7 @@ import { EmptyState, PageSkeleton } from "@/components/shared/states";
 import { AssignmentStatusBadge, DifficultyBadge } from "@/components/shared/status-badge";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { useAssignments } from "@/hooks/use-data";
-import { assignmentService } from "@/lib/services";
+import { assignmentService } from "@/lib/client";
 import { topicName } from "@/lib/mock-data/curriculum";
 import { cn, dueLabel, formatDate } from "@/lib/utils";
 

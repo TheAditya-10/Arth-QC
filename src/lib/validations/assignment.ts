@@ -1,10 +1,22 @@
 import { z } from "zod";
 
-export const questionSchema = z.object({
-  text: z.string().trim().min(5, "Write the question (at least 5 characters)"),
-  marks: z.coerce.number().int().min(1, "Min 1").max(50, "Max 50"),
-  expectedAnswer: z.string().trim().min(1, "Add the expected answer"),
+export const rubricStepFormSchema = z.object({
+  description: z.string().trim().min(2, "Describe the step"),
+  marks: z.coerce.number().positive("Must be more than 0").max(50),
 });
+
+export const questionSchema = z
+  .object({
+    text: z.string().trim().min(5, "Write the question (at least 5 characters)"),
+    marks: z.coerce.number().int().min(1, "Min 1").max(50, "Max 50"),
+    expectedAnswer: z.string().trim().min(1, "Add the expected answer"),
+    expectedSolution: z.string().trim().max(4000).optional().default(""),
+    rubric: z.array(rubricStepFormSchema).max(10).optional().default([]),
+  })
+  .refine((q) => q.rubric.length === 0 || Math.abs(q.rubric.reduce((s, r) => s + r.marks, 0) - q.marks) < 0.01, {
+    message: "Marking steps must add up to the question's marks",
+    path: ["rubric"],
+  });
 
 export const assignmentSchema = z.object({
   title: z.string().trim().min(3, "Title must be at least 3 characters").max(80),
@@ -22,6 +34,8 @@ export const assignmentSchema = z.object({
     .refine((v) => !Number.isNaN(new Date(v).getTime()), "Invalid date"),
   markingScheme: z.string().optional().default(""),
   referenceFileName: z.string().optional().default(""),
+  attachmentUploadIds: z.array(z.string()).max(5).optional().default([]),
+  allowAlternativeMethods: z.boolean().optional().default(true),
   source: z.enum(["manual", "ai"]),
 });
 

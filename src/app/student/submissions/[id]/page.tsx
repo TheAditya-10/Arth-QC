@@ -2,7 +2,9 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { api } from "@/lib/client/api";
+import { refresh } from "@/lib/client/store";
 import { motion } from "framer-motion";
 import { ArrowLeft, CheckCircle2, Loader2, MessageCircleHeart, RotateCcw, ShieldCheck, Sparkles, Target, ThumbsUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -23,12 +25,37 @@ export default function EvaluationResults() {
   const evaluations = useEvaluations();
   const assignments = useAssignmentsRaw();
   const [expandAll, setExpandAll] = useState<boolean | undefined>(undefined);
+  const pending = submissions?.find((s) => s.id === id)?.status === "processing";
+
+  // While the evaluation runs in the background, poll its status (which also nudges the worker).
+  useEffect(() => {
+    if (!pending) return;
+    const t = setInterval(() => {
+      void api("GET", `/api/submissions/${id}/status`)
+        .then((s) => {
+          if ((s as { done?: boolean }).done) void refresh();
+        })
+        .catch(() => {});
+    }, 4000);
+    return () => clearInterval(t);
+  }, [pending, id]);
 
   if (!submissions || !evaluations || !assignments) return <PageSkeleton cards={3} />;
   const sub = submissions.find((s) => s.id === id);
   if (!sub) return <NotFoundState what="submission" backHref="/student/homework" backLabel="Back to homework" />;
   const a = assignments.find((x) => x.id === sub.assignmentId);
   const e = evaluations.find((x) => x.id === sub.evaluationId);
+
+  if (sub.status === "failed") {
+    return (
+      <div className="mx-auto max-w-md py-16 text-center">
+        <ShieldCheck className="mx-auto h-10 w-10 text-indigo" />
+        <h1 className="mt-4 font-heading text-xl font-bold">Your homework is saved</h1>
+        <p className="mt-1 text-muted-foreground">Arthu couldn&apos;t check it automatically this time, so a parent will review it. Great job finishing it!</p>
+        <Button asChild className="mt-5"><Link href="/student/homework">Back to homework</Link></Button>
+      </div>
+    );
+  }
 
   if (!e) {
     return (
@@ -76,6 +103,16 @@ export default function EvaluationResults() {
           <Mascot mood={p >= 75 ? "celebrate" : "happy"} className="hidden h-28 w-28 lg:block" />
         </div>
       </motion.section>
+
+      {e.needsReview && !e.parentOverride && (
+        <div className="flex items-start gap-3 rounded-2xl border border-sun bg-sun-light/50 p-4">
+          <ShieldCheck className="mt-0.5 h-5 w-5 text-sun-dark" />
+          <div className="text-sm">
+            <p className="font-semibold">Some answers will be double-checked</p>
+            <p className="text-muted-foreground">Arthu wasn&apos;t 100% sure about a few answers, so Mumma or Papa will review them. Your marks may change a little.</p>
+          </div>
+        </div>
+      )}
 
       {e.parentOverride && (
         <div className="flex items-start gap-3 rounded-2xl border bg-card p-4">

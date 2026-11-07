@@ -5,7 +5,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { useAchievements, useAppPrefs, useCelebrations } from "@/hooks/use-data";
-import { rewardService } from "@/lib/services";
+import { rewardService } from "@/lib/client";
 import { achievementIcon } from "./icons";
 import { Mascot } from "./mascot";
 

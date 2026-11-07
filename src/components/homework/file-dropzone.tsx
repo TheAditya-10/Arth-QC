@@ -4,15 +4,17 @@ import { useCallback, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Camera, FileText, ImagePlus, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
-import type { UploadedFile } from "@/types";
-import { submissionService } from "@/lib/services";
+import type { LocalFile } from "@/lib/client/submission.service";
+import { submissionService } from "@/lib/client";
 import { cn, formatBytes, uid } from "@/lib/utils";
 
-const MAX_FILES = 8;
-const MAX_SIZE = 15 * 1024 * 1024;
-const ACCEPT = "image/png,image/jpeg,image/webp,image/heic,application/pdf";
+const MAX_FILES = 10;
+const MAX_IMAGE = 10 * 1024 * 1024;
+const MAX_PDF = 20 * 1024 * 1024;
+const ACCEPT = "image/png,image/jpeg,image/webp,application/pdf";
+const ALLOWED = ["image/png", "image/jpeg", "image/jpg", "image/webp", "application/pdf"];
 
-export function FileDropzone({ files, onChange, disabled }: { files: UploadedFile[]; onChange: (f: UploadedFile[]) => void; disabled?: boolean }) {
+export function FileDropzone({ files, onChange, disabled }: { files: LocalFile[]; onChange: (f: LocalFile[]) => void; disabled?: boolean }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [processing, setProcessing] = useState(0);
@@ -26,16 +28,17 @@ export function FileDropzone({ files, onChange, disabled }: { files: UploadedFil
         return;
       }
       const valid = incoming.filter((f) => {
-        const ok = f.type.startsWith("image/") || f.type === "application/pdf";
-        if (!ok) toast.error(`${f.name} isn't an image or PDF.`);
-        else if (f.size > MAX_SIZE) toast.error(`${f.name} is larger than 15 MB.`);
-        return ok && f.size <= MAX_SIZE;
+        const ok = ALLOWED.includes(f.type);
+        const max = f.type === "application/pdf" ? MAX_PDF : MAX_IMAGE;
+        if (!ok) toast.error(`${f.name}: please use JPG, PNG, WEBP or PDF.`);
+        else if (f.size > max) toast.error(`${f.name} is larger than ${max / 1048576} MB.`);
+        return ok && f.size <= max;
       });
       const take = valid.slice(0, room);
       if (valid.length > room) toast.warning(`Only ${room} more file${room === 1 ? "" : "s"} can be added.`);
       if (!take.length) return;
       setProcessing(take.length);
-      const prepared: UploadedFile[] = [];
+      const prepared: LocalFile[] = [];
       for (const f of take) {
         const isPdf = f.type === "application/pdf";
         prepared.push({
@@ -44,6 +47,7 @@ export function FileDropzone({ files, onChange, disabled }: { files: UploadedFil
           kind: isPdf ? "pdf" : "image",
           size: f.size,
           previewUrl: isPdf ? "" : await submissionService.fileToPreview(f),
+          file: f,
         });
       }
       setProcessing(0);
@@ -89,7 +93,7 @@ export function FileDropzone({ files, onChange, disabled }: { files: UploadedFil
           <ImagePlus className="h-8 w-8" />
         </motion.div>
         <p className="mt-4 font-heading text-lg font-semibold">{dragging ? "Drop your pages here!" : "Add photos of your notebook"}</p>
-        <p className="mt-1 text-sm text-muted-foreground">Drag & drop, or tap to choose · JPG, PNG or PDF · up to {MAX_FILES} files</p>
+        <p className="mt-1 text-sm text-muted-foreground">Drag & drop, or tap to choose · JPG, PNG, WEBP or PDF · up to {MAX_FILES} files</p>
         <div className="mt-4 flex items-center gap-2 text-xs font-semibold text-indigo-400">
           <Camera className="h-4 w-4" /> Tip: take photos in good light, one page per photo
         </div>

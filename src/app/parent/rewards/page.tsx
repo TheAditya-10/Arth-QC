@@ -19,11 +19,12 @@ import { PageSkeleton } from "@/components/shared/states";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { AchievementBadge } from "@/components/rewards/achievement-badge";
 import { useAchievements, useRewards, useScoreStats, useStudent } from "@/hooks/use-data";
-import { rewardService } from "@/lib/services";
-import { TRIGGER_LABELS } from "@/lib/services/rewards.service";
+import { rewardService } from "@/lib/client";
+import { TRIGGER_LABELS } from "@/lib/client/rewards.service";
 import { rewardSchema, type RewardFormInput, type RewardFormValues } from "@/lib/validations/assignment";
 import type { Reward, RewardTrigger } from "@/types";
 import { cn, formatDate } from "@/lib/utils";
+import { errorMessage } from "@/lib/client/api";
 
 const EMOJIS = ["🎁", "🍨", "🏆", "📚", "🎉", "🌳", "🎮", "🍕", "⚽", "🎨", "🧩", "🚲"];
 const GROUPS: { trigger: RewardTrigger; title: string; hint: string }[] = [
@@ -128,11 +129,16 @@ export default function ParentRewards() {
 
   if (!rewards || !achievements || !student || !stats) return <PageSkeleton />;
   const ctx = { streak: student.streak, xp: student.xp, ...stats };
-  const toDeliver = rewards.filter((r) => r.status === "unlocked");
+  const requests = rewards.filter((r) => r.status === "requested");
+  const toDeliver = rewards.filter((r) => r.status === "approved" || r.status === "unlocked");
 
-  const setStatus = async (r: Reward, status: Reward["status"], msg: string) => {
-    await rewardService.setRewardStatus(r.id, status);
-    toast.success(msg);
+  const decide = async (r: Reward, action: "approve" | "decline" | "deliver" | "grant" | "reset", msg: string) => {
+    try {
+      await rewardService.decideReward(r.id, action);
+      toast.success(msg);
+    } catch (e) {
+      toast.error(errorMessage(e));
+    }
   };
 
   return (
@@ -144,6 +150,27 @@ export default function ParentRewards() {
         actions={<Button onClick={() => setDialog({ open: true })}><Plus /> New reward</Button>}
       />
 
+      {requests.length > 0 && (
+        <Card className="border-indigo-200 bg-lavender/50">
+          <CardHeader><CardTitle className="flex items-center gap-2"><Gift className="h-5 w-5" /> {student.name} asked for ({requests.length})</CardTitle></CardHeader>
+          <CardContent className="space-y-2">
+            {requests.map((r) => (
+              <div key={r.id} className="flex flex-col gap-2 rounded-xl bg-card p-3 sm:flex-row sm:items-center">
+                <span className="text-2xl" aria-hidden>{r.emoji}</span>
+                <div className="flex-1">
+                  <p className="font-semibold">{r.title}</p>
+                  <p className="text-xs text-muted-foreground">Requested {r.requestedAt ? formatDate(r.requestedAt) : ""} · {TRIGGER_LABELS[r.trigger].describe(r.threshold)}</p>
+                </div>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="outline" onClick={() => decide(r, "decline", "Request declined")}>Decline</Button>
+                  <Button size="sm" onClick={() => decide(r, "approve", "Approved — remember to deliver it!")}>Approve</Button>
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
       {toDeliver.length > 0 && (
         <Card className="border-sun bg-sun-light/40">
           <CardHeader><CardTitle className="flex items-center gap-2"><Gift className="h-5 w-5 text-sun-dark" /> Ready to deliver ({toDeliver.length})</CardTitle></CardHeader>
@@ -153,9 +180,9 @@ export default function ParentRewards() {
                 <span className="text-2xl" aria-hidden>{r.emoji}</span>
                 <div className="flex-1">
                   <p className="font-semibold">{r.title}</p>
-                  <p className="text-xs text-muted-foreground">Earned {r.unlockedAt ? formatDate(r.unlockedAt) : ""} · {TRIGGER_LABELS[r.trigger].describe(r.threshold)}</p>
+                  <p className="text-xs text-muted-foreground">{r.status === "approved" ? "Approved" : "Earned"}{r.unlockedAt ? ` ${formatDate(r.unlockedAt)}` : ""} · {TRIGGER_LABELS[r.trigger].describe(r.threshold)}</p>
                 </div>
-                <Button size="sm" variant="mint" onClick={() => setStatus(r, "delivered", "Marked as delivered 🎉")}><PackageCheck /> Mark as delivered</Button>
+                <Button size="sm" variant="mint" onClick={() => decide(r, "deliver", "Marked as delivered 🎉")}><PackageCheck /> Mark as delivered</Button>
               </div>
             ))}
           </CardContent>
@@ -191,7 +218,7 @@ export default function ParentRewards() {
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <p className="font-semibold">{r.title}</p>
-                          <Badge variant={r.status === "delivered" ? "mint" : r.status === "unlocked" ? "sun" : "muted"} className="capitalize">{r.status}</Badge>
+                          <Badge variant={r.status === "delivered" ? "mint" : r.status === "locked" ? "muted" : "sun"} className="capitalize">{r.status}</Badge>
                         </div>
                         <p className="text-xs text-muted-foreground">{TRIGGER_LABELS[r.trigger].describe(r.threshold)}</p>
                         {r.status === "locked" && r.trigger !== "custom" && (
@@ -205,9 +232,10 @@ export default function ParentRewards() {
                         <DropdownMenuTrigger asChild><Button size="icon" variant="ghost" aria-label={`Actions for ${r.title}`}><MoreHorizontal /></Button></DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
                           <DropdownMenuItem onSelect={() => setDialog({ open: true, editing: r })}><Pencil /> Edit</DropdownMenuItem>
-                          {r.status === "locked" && <DropdownMenuItem onSelect={() => setStatus(r, "unlocked", "Reward unlocked")}><Unlock /> Unlock now</DropdownMenuItem>}
-                          {r.status === "unlocked" && <DropdownMenuItem onSelect={() => setStatus(r, "delivered", "Marked as delivered 🎉")}><PackageCheck /> Mark delivered</DropdownMenuItem>}
-                          {r.status !== "locked" && <DropdownMenuItem onSelect={() => setStatus(r, "locked", "Reward reset to locked")}><RotateCcw /> Reset to locked</DropdownMenuItem>}
+                          {(r.status === "locked" || r.status === "unlocked") && <DropdownMenuItem onSelect={() => decide(r, "grant", "Reward granted")}><Unlock /> Grant now</DropdownMenuItem>}
+                          {r.status === "requested" && <DropdownMenuItem onSelect={() => decide(r, "approve", "Request approved")}><Unlock /> Approve request</DropdownMenuItem>}
+                          {(r.status === "approved" || r.status === "unlocked" || r.status === "requested") && <DropdownMenuItem onSelect={() => decide(r, "deliver", "Marked as delivered 🎉")}><PackageCheck /> Mark delivered</DropdownMenuItem>}
+                          {(r.status === "requested" || r.status === "approved") && <DropdownMenuItem onSelect={() => decide(r, "reset", "Reward reset")}><RotateCcw /> Reset</DropdownMenuItem>}
                           <DropdownMenuSeparator />
                           <DropdownMenuItem onSelect={() => setToDelete(r)} className="text-destructive focus:text-destructive"><Trash2 /> Delete</DropdownMenuItem>
                         </DropdownMenuContent>

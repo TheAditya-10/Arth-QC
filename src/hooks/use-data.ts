@@ -1,9 +1,9 @@
 "use client";
 
 import { useMemo } from "react";
-import { useStore } from "@/lib/services/store";
-import { liveStatus } from "@/lib/services/assignment.service";
-import { bestScore, improvementPoints } from "@/lib/services/progress-engine";
+import { useStore } from "@/lib/client/store";
+import { liveStatus } from "@/lib/client/assignment.service";
+import { bestScore, improvementPoints } from "@/lib/client/progress-engine";
 import { levelFromXP } from "@/lib/utils/gamification";
 import type { Assignment, AssignmentStatus } from "@/types";
 

@@ -25,6 +25,8 @@ export function EvaluationStatusBadge({ status }: { status: EvaluationStatus }) 
       return <Badge variant="default"><ShieldCheck /> Parent reviewed</Badge>;
     case "failed":
       return <Badge variant="coral"><XCircle /> Failed</Badge>;
+    case "needs_review":
+      return <Badge variant="sun"><AlertCircle /> Needs review</Badge>;
     default:
       return <Badge variant="mint"><CheckCircle2 /> Evaluated</Badge>;
   }

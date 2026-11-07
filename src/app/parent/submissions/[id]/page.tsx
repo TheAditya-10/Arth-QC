@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
-import { ArrowLeft, FileText, Loader2, Maximize2, Pencil, Save, ShieldCheck, StickyNote, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, CheckCheck, ExternalLink, FileText, History, Loader2, Maximize2, Pencil, RefreshCw, Save, ShieldCheck, StickyNote, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,9 +15,10 @@ import { NotFoundState, PageSkeleton } from "@/components/shared/states";
 import { EvaluationStatusBadge } from "@/components/shared/status-badge";
 import { QuestionResultCard } from "@/components/evaluation/question-result-card";
 import { useWholeDB } from "@/hooks/use-data";
-import { submissionService } from "@/lib/services";
+import { submissionService } from "@/lib/client";
 import { topicName } from "@/lib/mock-data/curriculum";
 import { formatDateTime, pct } from "@/lib/utils";
+import { errorMessage } from "@/lib/client/api";
 
 export default function ParentSubmissionDetail() {
   const { id } = useParams<{ id: string }>();
@@ -34,7 +35,7 @@ export default function ParentSubmissionDetail() {
   useEffect(() => {
     if (e && !editing) {
       setMarks(Object.fromEntries(e.results.map((r) => [r.questionId, r.marksAwarded])));
-      setNote(e.parentOverride?.note ?? "");
+      setNote("");
     }
   }, [e, editing]);
 
@@ -51,13 +52,44 @@ export default function ParentSubmissionDetail() {
       toast.error(`Q${invalid.number}: marks must be between 0 and ${invalid.maxMarks}`);
       return;
     }
+    if (note.trim().length < 3) {
+      toast.error("Please add a short reason for the correction.");
+      return;
+    }
+    const corrections = e.results
+      .filter((r) => r.questionEvaluationId && Math.abs((marks[r.questionId] ?? r.marksAwarded) - r.marksAwarded) > 0.001)
+      .map((r) => ({ questionEvaluationId: r.questionEvaluationId!, newMarks: marks[r.questionId] }));
     setSaving(true);
     try {
-      await submissionService.overrideEvaluation(e.id, marks, note.trim());
-      toast.success("Evaluation updated", { description: "The student will see the reviewed marks." });
+      await submissionService.correctEvaluation(sub.id, corrections, note.trim());
+      toast.success(corrections.length ? "Evaluation corrected" : "Evaluation approved", { description: "The original AI marks are kept in the audit trail." });
       setEditing(false);
-    } catch {
-      toast.error("Couldn't save changes");
+    } catch (err) {
+      toast.error(errorMessage(err, "Couldn't save changes"));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const approve = async () => {
+    setSaving(true);
+    try {
+      await submissionService.correctEvaluation(sub.id, [], "Reviewed by parent — marks confirmed");
+      toast.success("Marked as reviewed");
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const retry = async (newVersion: boolean) => {
+    setSaving(true);
+    try {
+      await submissionService.retryEvaluation(sub.id, newVersion);
+      toast.success(newVersion ? "Re-evaluation started" : "Evaluation restarted", { description: "This usually takes under a minute." });
+    } catch (err) {
+      toast.error(errorMessage(err));
     } finally {
       setSaving(false);
     }
@@ -89,7 +121,7 @@ export default function ParentSubmissionDetail() {
               <p className="font-heading text-2xl font-bold">{pct(editing ? draftTotal : score, e.maxScore)}%</p>
             </div>
             {e.parentOverride && !editing && (
-              <span className="hidden text-xs text-muted-foreground sm:block">AI score: {e.parentOverride.originalScore}/{e.maxScore}</span>
+              <span className="hidden text-xs text-muted-foreground sm:block">Original AI score: {e.parentOverride.originalScore}/{e.maxScore}</span>
             )}
           </div>
         )}
@@ -138,10 +170,29 @@ export default function ParentSubmissionDetail() {
         </div>
 
         <div className="space-y-4">
-          {!e ? (
-            <Card className="flex items-center gap-3 p-6"><Loader2 className="h-5 w-5 animate-spin" /> Evaluation in progress…</Card>
+          {sub.status === "failed" ? (
+            <Card className="border-coral/50 p-5">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="mt-0.5 h-5 w-5 text-coral-dark" />
+                <div className="flex-1 text-sm">
+                  <p className="font-semibold">Automatic evaluation failed</p>
+                  <p className="text-muted-foreground">{sub.jobError ?? "The AI service couldn't process this submission."}</p>
+                </div>
+                <Button size="sm" onClick={() => retry(false)} disabled={saving}>{saving ? <Loader2 className="animate-spin" /> : <RefreshCw />} Retry</Button>
+              </div>
+            </Card>
+          ) : !e ? (
+            <Card className="flex items-center gap-3 p-6"><Loader2 className="h-5 w-5 animate-spin" /> Evaluation in progress… {sub.jobError && <span className="text-xs text-muted-foreground">(retrying: {sub.jobError})</span>}</Card>
           ) : (
             <>
+              {e.needsReview && e.reviewReasons && e.reviewReasons.length > 0 && (
+                <Card className="border-sun bg-sun-light/40">
+                  <CardContent className="p-4 text-sm">
+                    <p className="flex items-center gap-2 font-semibold"><AlertTriangle className="h-4 w-4 text-sun-dark" /> Please review — the AI flagged this evaluation</p>
+                    <ul className="mt-2 list-disc space-y-0.5 pl-5">{e.reviewReasons.map((r) => <li key={r}>{r}</li>)}</ul>
+                  </CardContent>
+                </Card>
+              )}
               <Card className="border-indigo-200">
                 <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
                   <div className="flex items-start gap-3">
@@ -153,19 +204,40 @@ export default function ParentSubmissionDetail() {
                       </p>
                     </div>
                   </div>
-                  {!editing && <Button onClick={() => setEditing(true)}><Pencil /> Correct marks</Button>}
+                  {!editing && (
+                    <div className="flex flex-wrap gap-2">
+                      {e.needsReview && <Button variant="outline" onClick={approve} disabled={saving}><CheckCheck /> Marks look right</Button>}
+                      <Button onClick={() => setEditing(true)}><Pencil /> Correct marks</Button>
+                      <Button variant="ghost" size="icon" onClick={() => retry(true)} disabled={saving} aria-label="Re-evaluate with AI" title="Re-evaluate with AI"><RefreshCw /></Button>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 
               {editing && (
                 <Card className="border-sun bg-sun-light/30">
                   <CardContent className="space-y-3 p-4">
-                    <Label htmlFor="note">Note for {db.student.name} (optional)</Label>
-                    <Textarea id="note" value={note} onChange={(ev) => setNote(ev.target.value.slice(0, 200))} placeholder="e.g. Q3 rounding is actually fine — well done!" />
+                    <Label htmlFor="note">Reason for the correction (shown to {db.student.name})</Label>
+                    <Textarea id="note" value={note} onChange={(ev) => setNote(ev.target.value.slice(0, 500))} placeholder="e.g. Q3: the handwriting says 18,000 — the AI misread it." />
                     <div className="flex flex-wrap justify-end gap-2">
                       <Button variant="ghost" onClick={() => setEditing(false)} disabled={saving}><X /> Cancel</Button>
                       <Button onClick={save} disabled={saving}>{saving ? <Loader2 className="animate-spin" /> : <Save />} Save review ({draftTotal}/{e.maxScore})</Button>
                     </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {e.corrections && e.corrections.length > 0 && (
+                <Card>
+                  <CardHeader><CardTitle className="flex items-center gap-2 text-base"><History className="h-4 w-4" /> Correction history</CardTitle></CardHeader>
+                  <CardContent className="space-y-1.5 text-sm">
+                    {e.corrections.map((c, i) => (
+                      <p key={i} className="rounded-lg bg-secondary/60 px-3 py-2">
+                        <b>Q{c.questionNumber}</b>: {c.previousMarks} → {c.newMarks} · {c.by} · {formatDateTime(c.at)}
+                        <span className="block text-muted-foreground">“{c.reason}”</span>
+                      </p>
+                    ))}
+                    {e.model && <p className="pt-1 text-xs text-muted-foreground">Evaluated by {e.model} · prompts {e.promptVersion}</p>}
                   </CardContent>
                 </Card>
               )}
@@ -202,11 +274,13 @@ export default function ParentSubmissionDetail() {
       <Dialog open={preview !== null} onOpenChange={(o) => !o && setPreview(null)}>
         <DialogContent className="max-w-2xl p-3">
           <DialogTitle className="px-2 pt-1 text-base">Page {preview !== null ? preview + 1 : ""} · {file?.name}</DialogTitle>
-          {file?.previewUrl ? (
+          {file?.kind === "pdf" && file.previewUrl ? (
+            <Button asChild variant="outline"><a href={file.previewUrl} target="_blank" rel="noreferrer"><ExternalLink /> Open PDF</a></Button>
+          ) : file?.previewUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={file.previewUrl} alt={file.name} className="max-h-[75vh] w-full rounded-xl object-contain" />
           ) : (
-            <div className="flex h-60 flex-col items-center justify-center gap-2 rounded-xl bg-paper text-muted-foreground"><FileText className="h-10 w-10" /> Preview not available in the demo</div>
+            <div className="flex h-60 flex-col items-center justify-center gap-2 rounded-xl bg-paper text-muted-foreground"><FileText className="h-10 w-10" /> Preview not available for this file</div>
           )}
           <div className="flex justify-between px-1">
             <Button variant="outline" size="sm" disabled={!preview} onClick={() => setPreview((p) => (p ? p - 1 : p))}>Previous</Button>

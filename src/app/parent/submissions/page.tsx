@@ -42,7 +42,9 @@ export default function ParentSubmissions() {
           <SelectTrigger className="sm:w-52" aria-label="Filter by status"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All statuses</SelectItem>
-            <SelectItem value="evaluated">Evaluated (to review)</SelectItem>
+            <SelectItem value="needs_review">Needs review</SelectItem>
+            <SelectItem value="evaluated">Evaluated</SelectItem>
+            <SelectItem value="failed">Failed</SelectItem>
             <SelectItem value="reviewed">Parent reviewed</SelectItem>
             <SelectItem value="processing">Processing</SelectItem>
           </SelectContent>
@@ -94,8 +96,8 @@ export default function ParentSubmissions() {
                       </td>
                       <td className="px-3 py-3"><EvaluationStatusBadge status={s.status} /></td>
                       <td className="px-5 py-3 text-right">
-                        <Button asChild size="sm" variant={s.status === "evaluated" ? "default" : "outline"}>
-                          <Link href={`/parent/submissions/${s.id}`}>{s.status === "evaluated" ? "Review" : "View"}</Link>
+                        <Button asChild size="sm" variant={s.status === "needs_review" || s.status === "failed" ? "default" : "outline"}>
+                          <Link href={`/parent/submissions/${s.id}`}>{s.status === "needs_review" || s.status === "evaluated" ? "Review" : "View"}</Link>
                         </Button>
                       </td>
                     </tr>

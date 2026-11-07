@@ -11,7 +11,7 @@ import { NotFoundState, PageSkeleton } from "@/components/shared/states";
 import { AssignmentStatusBadge, DifficultyBadge } from "@/components/shared/status-badge";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { useAssignments, useSubmissions } from "@/hooks/use-data";
-import { assignmentService } from "@/lib/services";
+import { assignmentService } from "@/lib/client";
 import { subjectName, topicName } from "@/lib/mock-data/curriculum";
 import { formatDateTime } from "@/lib/utils";
 

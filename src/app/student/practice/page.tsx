@@ -4,7 +4,7 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
-import { CalendarDays, Check, Flame, Play, RotateCcw, Sparkles, Swords, Target, Trophy, X, Zap } from "lucide-react";
+import { CalendarDays, Check, Flame, Loader2, Play, RotateCcw, Sparkles, Swords, Target, Trophy, Wrench, X, Zap } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,10 +16,11 @@ import { Mascot } from "@/components/shared/mascot";
 import { Confetti } from "@/components/shared/celebration";
 import { QuizRunner } from "@/components/student/quiz-runner";
 import { usePracticeResults, useTopicProgress } from "@/hooks/use-data";
-import { practiceService } from "@/lib/services";
-import type { PracticeSession } from "@/lib/services/practice.service";
+import { practiceService } from "@/lib/client";
+import type { PracticeSession, SessionResult } from "@/lib/client/practice.service";
+import { errorMessage } from "@/lib/client/api";
 import { SUBJECTS, TOPICS, topicName } from "@/lib/mock-data/curriculum";
-import type { Difficulty, PracticeAttempt, PracticeResult, PracticeSessionConfig, SubjectId } from "@/types";
+import type { Difficulty, PracticeSessionConfig, SubjectId } from "@/types";
 import { cn, dayKey, pct, relativeTime } from "@/lib/utils";
 
 const SPECIALS = [
@@ -35,8 +36,9 @@ function PracticeInner() {
   const topics = useTopicProgress();
   const history = usePracticeResults();
   const [session, setSession] = useState<PracticeSession | null>(null);
-  const [result, setResult] = useState<{ r: PracticeResult; session: PracticeSession } | null>(null);
+  const [result, setResult] = useState<{ r: SessionResult; session: PracticeSession } | null>(null);
   const [finishing, setFinishing] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [subject, setSubject] = useState<SubjectId>("mathematics");
   const [topicId, setTopicId] = useState<string>("mixed");
   const [difficulty, setDifficulty] = useState<Difficulty>("medium");
@@ -45,10 +47,13 @@ function PracticeInner() {
   const retryId = params.get("retry");
   useEffect(() => {
     if (!retryId || !topics) return;
-    const s = practiceService.buildRetrySession(retryId);
-    if (s) setSession(s);
-    else toast.info("Nothing to retry — every answer was correct!");
     router.replace("/student/practice");
+    setStarting(true);
+    practiceService
+      .buildRetrySession(retryId === "mistakes" ? undefined : retryId)
+      .then((s) => setSession(s))
+      .catch((e) => toast.info(errorMessage(e)))
+      .finally(() => setStarting(false));
   }, [retryId, topics, router]);
 
   const dailyDoneToday = useMemo(
@@ -57,26 +62,37 @@ function PracticeInner() {
   );
 
   if (!topics || !history) return <PageSkeleton />;
+  if (starting) {
+    return (
+      <div className="flex flex-col items-center justify-center py-24 text-center" role="status">
+        <Loader2 className="h-10 w-10 animate-spin text-indigo" />
+        <p className="mt-4 font-heading text-lg font-semibold">Preparing your questions…</p>
+      </div>
+    );
+  }
 
-  const start = (config: PracticeSessionConfig) => {
-    const s = practiceService.buildSession(config);
-    if (!s.items.length) {
-      toast.error("No questions available for that choice yet.");
-      return;
+  const start = async (config: PracticeSessionConfig) => {
+    setStarting(true);
+    try {
+      const s = await practiceService.buildSession(config);
+      setResult(null);
+      setSession(s);
+    } catch (e) {
+      toast.error(errorMessage(e, "Couldn't start practice. Please try again."));
+    } finally {
+      setStarting(false);
     }
-    setResult(null);
-    setSession(s);
   };
 
-  const finish = async (attempts: PracticeAttempt[]) => {
+  const finish = async () => {
     if (!session) return;
     setFinishing(true);
     try {
-      const r = await practiceService.completeSession(session, attempts);
+      const r = await practiceService.completeSession(session);
       setResult({ r, session });
       setSession(null);
-    } catch {
-      toast.error("Couldn't save your quiz. Please try again.");
+    } catch (e) {
+      toast.error(errorMessage(e, "Couldn't save your quiz. Please try again."));
     } finally {
       setFinishing(false);
     }
@@ -89,6 +105,7 @@ function PracticeInner() {
         finishing={finishing}
         onFinish={finish}
         onQuit={() => {
+          practiceService.abandonSession(session.id);
           setSession(null);
           toast("Practice paused", { description: "No worries — come back any time." });
         }}
@@ -118,10 +135,10 @@ function PracticeInner() {
           <CardHeader><CardTitle>Review</CardTitle></CardHeader>
           <CardContent>
             <ul className="space-y-2">
-              {s.items.map((it, i) => {
-                const at = r.attempts.find((a) => a.questionId === it.id);
+              {r.review.map((it, i) => {
+                const at = { correct: it.correct, answer: it.studentAnswer };
                 return (
-                  <li key={it.id} className="flex items-start gap-3 rounded-xl border p-3">
+                  <li key={it.questionId} className="flex items-start gap-3 rounded-xl border p-3">
                     <span className={cn("mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-white", at?.correct ? "bg-mint-dark" : "bg-coral-dark")}>
                       {at?.correct ? <Check className="h-3.5 w-3.5" strokeWidth={3} /> : <X className="h-3.5 w-3.5" strokeWidth={3} />}
                     </span>
@@ -150,7 +167,15 @@ function PracticeInner() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Practice Centre" description="Quick-fire questions to sharpen your skills. Every correct answer = XP!" />
+      <PageHeader
+        title="Practice Centre"
+        description="Quick-fire questions to sharpen your skills. Every correct answer = XP!"
+        actions={
+          <Button variant="outline" onClick={() => router.push("/student/practice?retry=mistakes")}>
+            <Wrench /> Fix my mistakes
+          </Button>
+        }
+      />
 
       <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {SPECIALS.map((sp, i) => {
@@ -278,7 +303,7 @@ function PracticeInner() {
                       </span>
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-semibold">
-                          {h.config.mode === "custom" ? topicName(h.config.topicId) : practiceService.SPECIAL_MODES[h.config.mode].title}
+                          {h.title ?? (h.config.mode === "custom" ? topicName(h.config.topicId) : practiceService.SPECIAL_MODES[h.config.mode].title)}
                         </p>
                         <p className="text-xs text-muted-foreground">{h.correct}/{h.total} correct · {relativeTime(h.completedAt)}</p>
                       </div>

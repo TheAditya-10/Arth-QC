@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { NotFoundState, PageSkeleton } from "@/components/shared/states";
 import { AssignmentStatusBadge, DifficultyBadge } from "@/components/shared/status-badge";
 import { useAssignments, useSubmissions } from "@/hooks/use-data";
-import { assignmentService } from "@/lib/services";
+import { assignmentService } from "@/lib/client";
 import { topicName } from "@/lib/mock-data/curriculum";
 import { dueLabel, formatDate } from "@/lib/utils";
 
@@ -70,11 +70,11 @@ export default function AssignmentDetails() {
                 </li>
               ))}
             </ol>
-            {a.referenceFileName && (
-              <p className="mt-4 flex items-center gap-2 rounded-xl border bg-paper p-3 text-sm">
-                <FileText className="h-4 w-4 text-indigo-400" /> Reference: {a.referenceFileName}
-              </p>
-            )}
+            {a.attachments?.map((att) => (
+              <a key={att.id} href={att.url} target="_blank" rel="noreferrer" className="mt-4 flex items-center gap-2 rounded-xl border bg-paper p-3 text-sm font-medium hover:bg-secondary/50">
+                <FileText className="h-4 w-4 text-indigo-400" /> Worksheet: {att.name}
+              </a>
+            ))}
           </CardContent>
         </Card>
 

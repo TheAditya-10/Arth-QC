@@ -12,6 +12,8 @@ const ERROR_LABEL: Record<ErrorKind, string> = {
   calculation: "Calculation slip",
   incomplete: "Incomplete working",
   notation: "Notation / units",
+  method: "Method choice",
+  misread: "Misread the question",
 };
 
 const ring = { correct: "bg-mint-dark", partial: "bg-sun-dark", incorrect: "bg-coral-dark" } as const;
@@ -85,6 +87,42 @@ export function QuestionResultCard({ r, defaultOpen, footer }: { r: QuestionResu
               <p className="mt-0.5 text-[15px] leading-relaxed">{r.explanation}</p>
             </div>
           </div>
+          {r.feedback && (
+            <div className="grid gap-2 sm:grid-cols-2">
+              {[
+                ["What went wrong", r.feedback.whatWentWrong],
+                ["Why it's not right", r.feedback.whyIncorrect],
+                ["The right approach", r.feedback.correctApproach],
+                ["Next time", r.feedback.howToAvoid],
+              ]
+                .filter(([, v]) => v)
+                .map(([k, v]) => (
+                  <div key={k} className="rounded-xl border bg-paper p-3 text-sm">
+                    <p className="text-xs font-bold uppercase tracking-wide text-muted-foreground">{k}</p>
+                    <p className="mt-1">{v}</p>
+                  </div>
+                ))}
+              {r.feedback.example && (
+                <div className="rounded-xl border border-mint bg-mint-light/40 p-3 text-sm sm:col-span-2">
+                  <p className="text-xs font-bold uppercase tracking-wide text-mint-dark">Example</p>
+                  <p className="mt-1 whitespace-pre-line">{r.feedback.example}</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {r.recommendedPractice && r.recommendedPractice.length > 0 && (
+            <div className="text-sm">
+              <p className="mb-1 font-semibold">Try these</p>
+              <ul className="list-disc space-y-0.5 pl-5 text-muted-foreground">{r.recommendedPractice.map((x) => <li key={x}>{x}</li>)}</ul>
+            </div>
+          )}
+
+          {r.needsReview && (
+            <p className="rounded-lg bg-sun-light px-3 py-2 text-xs font-medium text-sun-dark">A parent will double-check this question.</p>
+          )}
+          {r.verificationNote && <p className="text-xs text-muted-foreground">Exact check: {r.verificationNote}</p>}
+
           {footer}
         </div>
       </CollapsibleContent>

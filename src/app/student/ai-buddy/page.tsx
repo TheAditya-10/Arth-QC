@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Mascot } from "@/components/shared/mascot";
 import { PageSkeleton } from "@/components/shared/states";
 import { useChat, useStudent } from "@/hooks/use-data";
-import { buddyService } from "@/lib/services";
+import { buddyService } from "@/lib/client";
 import { cn, initials } from "@/lib/utils";
 
 /** Renders **bold** segments and line breaks from scripted buddy replies. */

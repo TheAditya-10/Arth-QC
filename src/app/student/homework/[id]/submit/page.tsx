@@ -2,24 +2,22 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowLeft, CloudUpload, Loader2, Send, Sparkles } from "lucide-react";
+import { ArrowLeft, CloudUpload, Loader2, Send, BookOpen } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { NotFoundState, PageSkeleton } from "@/components/shared/states";
 import { FileDropzone } from "@/components/homework/file-dropzone";
 import { ProcessingScreen } from "@/components/evaluation/processing-screen";
 import { useAssignments } from "@/hooks/use-data";
-import { submissionService } from "@/lib/services";
-import { TOPICS, topicName } from "@/lib/mock-data/curriculum";
-import { notebookPage } from "@/lib/utils/notebook";
-import { uid } from "@/lib/utils";
-import type { UploadedFile } from "@/types";
+import { submissionService } from "@/lib/client";
+import type { LocalFile } from "@/lib/client/submission.service";
+import { errorMessage, idempotencyKey } from "@/lib/client/api";
+import { topicName } from "@/lib/mock-data/curriculum";
 
 type Phase = "select" | "uploading" | "processing" | "error";
 
@@ -27,35 +25,20 @@ export default function SubmitHomework() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const assignments = useAssignments();
-  const [files, setFiles] = useState<UploadedFile[]>([]);
+  const [files, setFiles] = useState<LocalFile[]>([]);
   const [notes, setNotes] = useState("");
-  const [topicId, setTopicId] = useState<string>("");
   const [phase, setPhase] = useState<Phase>("select");
   const [uploadPct, setUploadPct] = useState(0);
   const [stage, setStage] = useState(0);
+  const [retrying, setRetrying] = useState(false);
+  // Same key for retries of this submit, so a network retry never creates a duplicate.
+  const submitKey = useRef(idempotencyKey());
+  const uploaded = useRef<{ sig: string; ids: string[] } | null>(null);
 
   if (!assignments) return <PageSkeleton cards={2} />;
   const a = assignments.find((x) => x.id === id);
   if (!a) return <NotFoundState what="assignment" backHref="/student/homework" backLabel="Back to homework" />;
-  const done = a.live === "evaluated" || a.live === "submitted";
-  const chosenTopic = topicId || a.topicId;
-
-  const addSamplePages = () => {
-    const half = Math.ceil(a.questions.length / 2);
-    const pages = [a.questions.slice(0, half), a.questions.slice(half)].filter((p) => p.length);
-    const samples: UploadedFile[] = pages.map((qs, i) => ({
-      id: uid("f"),
-      name: `sample-page-${i + 1}.jpg`,
-      kind: "image",
-      size: 210_000 + i * 24_000,
-      previewUrl: notebookPage(
-        qs.flatMap((q) => [`Q${q.number}. ${q.expectedAnswer.slice(0, 34)}`, ""]),
-        i === 0 ? { title: a.title.slice(0, 28) } : {},
-      ),
-    }));
-    setFiles((f) => [...f, ...samples].slice(0, 8));
-    toast.success("Sample notebook pages added", { description: "Great for trying the demo without a camera." });
-  };
+  const done = (a.live === "evaluated" || a.live === "submitted") && phase === "select";
 
   const submit = async () => {
     if (!files.length) {
@@ -64,19 +47,28 @@ export default function SubmitHomework() {
     }
     try {
       setPhase("uploading");
-      await submissionService.uploadFiles(files, setUploadPct);
-      const sub = await submissionService.createSubmission({ assignmentId: a.id, files, notes: notes.trim() || undefined, topicId: chosenTopic });
+      // Re-use already uploaded files if the student retries after an error.
+      const sig = files.map((f) => f.id).join(",");
+      const ids = uploaded.current?.sig === sig ? uploaded.current.ids : await submissionService.uploadFiles(files, setUploadPct);
+      uploaded.current = { sig, ids };
+      const sub = await submissionService.createSubmission({ assignmentId: a.id, uploadIds: ids, notes: notes.trim() || undefined, key: submitKey.current });
       setPhase("processing");
-      await submissionService.evaluateSubmission(sub.id, setStage);
-      toast.success("Your homework has been checked!", { description: "Let's see how you did." });
-      router.replace(`/student/submissions/${sub.id}`);
+      const status = await submissionService.evaluateSubmission(sub.submissionId, setStage, { onStatus: (s) => setRetrying(s.retrying) });
+      if (status.status === "FAILED") {
+        toast.error("We couldn't check this automatically", { description: "Your work is saved — a parent will review it." });
+      } else if (status.done) {
+        toast.success("Your homework has been checked!", { description: "Let's see how you did." });
+      } else {
+        toast("Still checking…", { description: "This is taking longer than usual. Your results will appear soon." });
+      }
+      router.replace(`/student/submissions/${sub.submissionId}`);
     } catch (e) {
       setPhase("error");
-      toast.error("Upload failed", { description: e instanceof Error ? e.message : "Please try again." });
+      toast.error("Submission failed", { description: errorMessage(e, "Please try again.") });
     }
   };
 
-  if (phase === "processing") return <ProcessingScreen stage={stage} title={a.title} />;
+  if (phase === "processing") return <ProcessingScreen stage={stage} title={retrying ? `${a.title} — busy right now, retrying automatically…` : a.title} />;
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -96,25 +88,14 @@ export default function SubmitHomework() {
       ) : (
         <div className="mt-6 space-y-5">
           <FileDropzone files={files} onChange={setFiles} disabled={phase === "uploading"} />
-          {files.length === 0 && (
-            <button type="button" onClick={addSamplePages} className="flex w-full items-center justify-center gap-2 text-sm font-semibold text-indigo-500 hover:text-indigo">
-              <Sparkles className="h-4 w-4" /> No photos handy? Use sample notebook pages
-            </button>
-          )}
-
           <Card>
             <CardContent className="grid gap-5 p-5 sm:grid-cols-2">
               <div className="space-y-2">
-                <Label htmlFor="topic">Topic</Label>
-                <Select value={chosenTopic} onValueChange={setTopicId} disabled={phase === "uploading"}>
-                  <SelectTrigger id="topic"><SelectValue placeholder="Choose topic" /></SelectTrigger>
-                  <SelectContent>
-                    {TOPICS.map((t) => (
-                      <SelectItem key={t.id} value={t.id}>Ch {t.chapter} · {t.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">Set by your parent: {topicName(a.topicId)}. Change only if needed.</p>
+                <Label>Topic</Label>
+                <p className="flex items-center gap-2 rounded-xl border bg-paper px-3 py-2.5 text-sm font-medium">
+                  <BookOpen className="h-4 w-4 text-indigo-400" /> {topicName(a.topicId)}
+                </p>
+                <p className="text-xs text-muted-foreground">Set by your parent for this assignment.</p>
               </div>
               <div className="space-y-2 sm:row-span-2">
                 <Label htmlFor="notes">Notes for Mumma & Papa <span className="font-normal text-muted-foreground">(optional)</span></Label>

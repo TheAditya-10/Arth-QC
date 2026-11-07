@@ -2,10 +2,10 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Controller, useFieldArray, useForm } from "react-hook-form";
+import { Controller, useFieldArray, useForm, type Control, type FieldErrors, type UseFormRegister } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { AnimatePresence, motion } from "framer-motion";
-import { FileUp, GripVertical, Loader2, PenLine, Plus, Save, Sparkles, Trash2, Wand2, X } from "lucide-react";
+import { ChevronDown, FileUp, GripVertical, ListChecks, Loader2, PenLine, Plus, Save, Sparkles, Trash2, Wand2, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,7 +14,9 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { assignmentSchema, type AssignmentFormInput, type AssignmentFormValues } from "@/lib/validations/assignment";
-import { assignmentService } from "@/lib/services";
+import { assignmentService } from "@/lib/client";
+import { uploadFile } from "@/lib/client/upload";
+import { errorMessage } from "@/lib/client/api";
 import { SUBJECTS, TOPICS } from "@/lib/mock-data/curriculum";
 import type { Assignment, Difficulty } from "@/types";
 import { cn } from "@/lib/utils";
@@ -36,7 +38,11 @@ function defaults(a?: Assignment): AssignmentFormInput {
     grade: a?.grade ?? 6,
     description: a?.description ?? "",
     instructions: a?.instructions.join("\n") ?? "Show all your working.\nWrite neatly and number each answer.",
-    questions: a?.questions.map((q) => ({ text: q.text, marks: q.marks, expectedAnswer: q.expectedAnswer })) ?? [{ text: "", marks: 5, expectedAnswer: "" }],
+    questions: a?.questions.map((q) => ({ text: q.text, marks: q.marks, expectedAnswer: q.expectedAnswer, expectedSolution: q.expectedSolution ?? "", rubric: q.markingSteps ?? [] })) ?? [
+      { text: "", marks: 5, expectedAnswer: "", expectedSolution: "", rubric: [] },
+    ],
+    attachmentUploadIds: [],
+    allowAlternativeMethods: true,
     difficulty: a?.difficulty ?? "medium",
     estimatedMinutes: a?.estimatedMinutes ?? 30,
     dueDate: toLocalInput(a?.dueDate ?? due.toISOString()),
@@ -50,12 +56,60 @@ function FieldError({ msg }: { msg?: string }) {
   return msg ? <p className="text-xs font-medium text-destructive" role="alert">{msg}</p> : null;
 }
 
+/** Optional expected solution + step-wise marking rubric for one question. */
+function RubricEditor({
+  index,
+  control,
+  register,
+  errors,
+}: {
+  index: number;
+  control: Control<AssignmentFormInput, unknown, AssignmentFormValues>;
+  register: UseFormRegister<AssignmentFormInput>;
+  errors: FieldErrors<AssignmentFormInput>;
+}) {
+  const { fields, append, remove } = useFieldArray({ control, name: `questions.${index}.rubric` });
+  const [open, setOpen] = useState(fields.length > 0);
+  const rubricError = errors.questions?.[index]?.rubric as { message?: string; root?: { message?: string } } | undefined;
+  return (
+    <div className="rounded-xl border border-dashed bg-card/60">
+      <button type="button" onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-indigo-500" aria-expanded={open}>
+        <ListChecks className="h-4 w-4" /> Solution & marking steps <span className="font-normal text-muted-foreground">(optional — otherwise the AI proposes a rubric)</span>
+        <ChevronDown className={cn("ml-auto h-4 w-4 transition-transform", open && "rotate-180")} />
+      </button>
+      {open && (
+        <div className="space-y-3 border-t px-3 pb-3 pt-3">
+          <div className="space-y-1.5">
+            <Label htmlFor={`q-${index}-sol`} className="text-xs">Expected solution</Label>
+            <Textarea id={`q-${index}-sol`} className="min-h-[56px]" placeholder="Short worked solution (helps the AI mark steps)" {...register(`questions.${index}.expectedSolution`)} />
+          </div>
+          <div className="space-y-2">
+            <p className="text-xs font-semibold">Marking steps (must add up to the question&apos;s marks)</p>
+            {fields.map((f, k) => (
+              <div key={f.id} className="flex items-center gap-2">
+                <Input aria-label={`Step ${k + 1} description`} placeholder={`Step ${k + 1}, e.g. Find a common denominator`} {...register(`questions.${index}.rubric.${k}.description`)} />
+                <Input aria-label={`Step ${k + 1} marks`} type="number" min={0.5} step={0.5} className="w-20" {...register(`questions.${index}.rubric.${k}.marks`)} />
+                <Button type="button" variant="ghost" size="icon" onClick={() => remove(k)} aria-label={`Remove step ${k + 1}`}><X /></Button>
+              </div>
+            ))}
+            <Button type="button" variant="outline" size="sm" onClick={() => append({ description: "", marks: 1 })} disabled={fields.length >= 10}>
+              <Plus /> Add step
+            </Button>
+            <FieldError msg={rubricError?.message ?? rubricError?.root?.message} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function AssignmentForm({ existing }: { existing?: Assignment }) {
   const router = useRouter();
   const [mode, setMode] = useState<"manual" | "ai">(existing?.source ?? "manual");
   const [ai, setAi] = useState<{ topicId: string; difficulty: Difficulty; count: number; marksEach: number }>({ topicId: "fractions", difficulty: "medium", count: 5, marksEach: 4 });
   const [generating, setGenerating] = useState(false);
   const [generated, setGenerated] = useState(Boolean(existing));
+  const [attaching, setAttaching] = useState(false);
 
   const form = useForm<AssignmentFormInput, unknown, AssignmentFormValues>({
     resolver: zodResolver(assignmentSchema),
@@ -78,14 +132,14 @@ export function AssignmentForm({ existing }: { existing?: Assignment }) {
         description: res.description,
         topicId: ai.topicId,
         difficulty: ai.difficulty,
-        questions: res.questions,
+        questions: res.questions.map((q) => ({ ...q, expectedSolution: q.expectedSolution ?? "", rubric: q.rubric ?? [] })),
         estimatedMinutes: Math.max(10, res.questions.length * 5),
         source: "ai",
       });
       setGenerated(true);
       toast.success(`Generated ${res.questions.length} questions`, { description: "Review and edit them before saving." });
-    } catch {
-      toast.error("Generation failed. Please try again.");
+    } catch (e) {
+      toast.error(errorMessage(e, "Generation failed. Please try again."));
     } finally {
       setGenerating(false);
     }
@@ -103,7 +157,7 @@ export function AssignmentForm({ existing }: { existing?: Assignment }) {
         router.push(`/parent/assignments/${a.id}`);
       }
     } catch (e) {
-      toast.error("Couldn't save", { description: e instanceof Error ? e.message : undefined });
+      toast.error("Couldn't save", { description: errorMessage(e) });
     }
   };
 
@@ -115,7 +169,7 @@ export function AssignmentForm({ existing }: { existing?: Assignment }) {
         <div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="Creation method">
           {([
             { k: "manual", icon: PenLine, t: "Manual assignment", d: "Type your own questions and answers." },
-            { k: "ai", icon: Wand2, t: "AI assignment", d: "Pick a topic and let Arth-QC draft questions (demo)." },
+            { k: "ai", icon: Wand2, t: "AI assignment", d: "Pick a topic and let Gemini draft questions for you to review." },
           ] as const).map((o) => (
             <button
               key={o.k}
@@ -144,7 +198,7 @@ export function AssignmentForm({ existing }: { existing?: Assignment }) {
             <Card className="border-indigo-200 bg-lavender/50">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2"><Sparkles className="h-5 w-5 text-sun-dark" /> Generate with AI</CardTitle>
-                <p className="text-sm text-muted-foreground">Simulated in this demo — questions come from the built-in NCERT question bank.</p>
+                <p className="text-sm text-muted-foreground">Gemini drafts NCERT-aligned questions with answers and marking steps. Review and edit everything before assigning.</p>
               </CardHeader>
               <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
                 <div className="space-y-2 lg:col-span-2">
@@ -280,7 +334,7 @@ export function AssignmentForm({ existing }: { existing?: Assignment }) {
                 <CardTitle>Questions</CardTitle>
                 <p className="text-sm text-muted-foreground">{fields.length} question{fields.length === 1 ? "" : "s"} · Maximum marks: <b className="text-foreground">{total}</b></p>
               </div>
-              <Button type="button" variant="outline" size="sm" onClick={() => append({ text: "", marks: 5, expectedAnswer: "" })} disabled={fields.length >= 25}>
+              <Button type="button" variant="outline" size="sm" onClick={() => append({ text: "", marks: 5, expectedAnswer: "", expectedSolution: "", rubric: [] })} disabled={fields.length >= 25}>
                 <Plus /> Add question
               </Button>
             </CardHeader>
@@ -311,6 +365,9 @@ export function AssignmentForm({ existing }: { existing?: Assignment }) {
                         <Input id={`q-${i}-ans`} placeholder="Model answer used for evaluation" aria-invalid={!!errors.questions?.[i]?.expectedAnswer} {...register(`questions.${i}.expectedAnswer`)} />
                         <FieldError msg={errors.questions?.[i]?.expectedAnswer?.message} />
                       </div>
+                      <div className="md:col-span-2">
+                        <RubricEditor index={i} control={control} register={register} errors={errors} />
+                      </div>
                     </div>
                   </motion.div>
                 ))}
@@ -327,24 +384,40 @@ export function AssignmentForm({ existing }: { existing?: Assignment }) {
               </div>
               <div className="space-y-2">
                 <Label>Reference worksheet <span className="font-normal text-muted-foreground">(optional)</span></Label>
+                {existing?.attachments?.map((att) => (
+                  <a key={att.id} href={att.url} target="_blank" rel="noreferrer" className="flex items-center gap-3 rounded-xl border bg-paper p-3 text-sm font-medium hover:bg-secondary/50">
+                    <FileUp className="h-5 w-5 text-indigo-400" /> <span className="flex-1 truncate">{att.name}</span>
+                  </a>
+                ))}
                 {refName ? (
                   <div className="flex items-center gap-3 rounded-xl border bg-paper p-3">
                     <FileUp className="h-5 w-5 text-indigo-400" />
                     <span className="flex-1 truncate text-sm font-medium">{refName}</span>
-                    <Button type="button" size="icon" variant="ghost" onClick={() => setValue("referenceFileName", "")} aria-label="Remove worksheet"><X /></Button>
+                    <Button type="button" size="icon" variant="ghost" onClick={() => { setValue("referenceFileName", ""); setValue("attachmentUploadIds", []); }} aria-label="Remove worksheet"><X /></Button>
                   </div>
                 ) : (
-                  <label className="flex cursor-pointer flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-indigo-200 p-6 text-center text-sm text-muted-foreground hover:bg-secondary/40">
-                    <FileUp className="h-6 w-6 text-indigo-400" />
-                    <span className="font-semibold text-indigo">Upload PDF or image</span>
-                    <span className="text-xs">Stored by name only in this demo</span>
+                  <label className={cn("flex cursor-pointer flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-indigo-200 p-6 text-center text-sm text-muted-foreground hover:bg-secondary/40", attaching && "pointer-events-none opacity-60")}>
+                    {attaching ? <Loader2 className="h-6 w-6 animate-spin text-indigo-400" /> : <FileUp className="h-6 w-6 text-indigo-400" />}
+                    <span className="font-semibold text-indigo">{attaching ? "Uploading…" : "Upload PDF or image"}</span>
+                    <span className="text-xs">JPG, PNG, WEBP (10 MB) or PDF (20 MB) · stored privately</span>
                     <input
                       type="file"
-                      accept="application/pdf,image/*"
+                      accept="application/pdf,image/jpeg,image/png,image/webp"
                       className="sr-only"
-                      onChange={(e) => {
+                      onChange={async (e) => {
                         const f = e.target.files?.[0];
-                        if (f) setValue("referenceFileName", f.name);
+                        e.target.value = "";
+                        if (!f) return;
+                        setAttaching(true);
+                        try {
+                          const id = await uploadFile(f, "ASSIGNMENT_ATTACHMENT");
+                          setValue("attachmentUploadIds", [id]);
+                          setValue("referenceFileName", f.name);
+                        } catch (err) {
+                          toast.error(errorMessage(err, "Upload failed"));
+                        } finally {
+                          setAttaching(false);
+                        }
                       }}
                     />
                   </label>

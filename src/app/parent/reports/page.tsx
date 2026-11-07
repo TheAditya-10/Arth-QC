@@ -1,7 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Download, Eye, Loader2, Mail, Send } from "lucide-react";
+import { Download, Eye, History, Loader2, Mail, RefreshCw, Send } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { errorMessage } from "@/lib/client/api";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,7 +16,7 @@ import { PageHeader } from "@/components/shared/page-header";
 import { PageSkeleton } from "@/components/shared/states";
 import { ReportView } from "@/components/parent/report-view";
 import { useWholeDB } from "@/hooks/use-data";
-import { reportService } from "@/lib/services";
+import { reportService } from "@/lib/client";
 import type { ReportSettings } from "@/types";
 import { formatDate, formatDateTime, initials } from "@/lib/utils";
 
@@ -40,8 +42,12 @@ export default function ReportsPage() {
   const sendTest = async () => {
     setSending(true);
     try {
-      const res = await reportService.sendTestReport(enabledRecipients.map((r) => r.email));
-      toast.success("Test report sent (simulated)", { description: `Delivered to ${res.sentTo.join(", ")}. No real emails are sent in this demo.` });
+      const res = await reportService.sendTestReport();
+      const skipped = res.results.filter((r) => r.status === "SKIPPED");
+      const failed = res.results.filter((r) => r.status === "FAILED");
+      if (failed.length) toast.error("Some test emails failed", { description: failed.map((f) => f.email).join(", ") });
+      else if (skipped.length) toast.warning("Email isn't configured on this server", { description: "Set RESEND_API_KEY to send real emails. The report was generated successfully." });
+      else toast.success("Test report sent", { description: `Delivered to ${res.sentTo.join(", ")}.` });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Couldn't send");
     } finally {
@@ -104,6 +110,50 @@ export default function ReportsPage() {
 
           <Card>
             <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base"><History className="h-4 w-4" /> Report history</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {db.pastReports.length === 0 && <p className="text-sm text-muted-foreground">No weekly reports have been generated yet. The first one is created at the scheduled time.</p>}
+              {db.pastReports.map((r) => (
+                <div key={r.id} className="rounded-xl border p-3 text-sm">
+                  <div className="flex items-center justify-between gap-2">
+                    <button type="button" className="font-semibold hover:underline" onClick={() => setWeekId(r.id)}>Week of {formatDate(r.weekStart)}</button>
+                    <Badge variant={r.status === "SENT" ? "mint" : r.status === "FAILED" ? "coral" : r.status === "PARTIAL" ? "sun" : "muted"}>{r.status.toLowerCase()}</Badge>
+                  </div>
+                  {r.deliveries.length > 0 && (
+                    <ul className="mt-1.5 space-y-0.5 text-xs text-muted-foreground">
+                      {r.deliveries.map((d) => (
+                        <li key={d.email} className="flex justify-between gap-2">
+                          <span className="truncate">{d.email}</span>
+                          <span className={d.status === "FAILED" ? "font-semibold text-coral-dark" : ""} title={d.error ?? undefined}>{d.status.toLowerCase()}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {(r.status === "FAILED" || r.status === "PARTIAL") && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="mt-2"
+                      onClick={async () => {
+                        try {
+                          const res = await reportService.retryReport(r.id);
+                          toast.success(`Retry finished: ${res.status.toLowerCase()}`);
+                        } catch (e) {
+                          toast.error(errorMessage(e));
+                        }
+                      }}
+                    >
+                      <RefreshCw /> Retry delivery
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
               <CardTitle className="text-base">Schedule</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -121,7 +171,7 @@ export default function ReportsPage() {
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="rep-time">Time</Label>
-                  <Input id="rep-time" type="time" value={settings.time} disabled={!settings.enabled} onChange={(e) => e.target.value && reportService.updateReportSettings({ time: e.target.value })} />
+                  <Input id="rep-time" type="time" key={settings.time} defaultValue={settings.time} disabled={!settings.enabled} onBlur={(e) => e.target.value && e.target.value !== settings.time && update({ time: e.target.value }, "Report time saved")} />
                 </div>
               </div>
               <div className="flex items-center justify-between">
@@ -133,7 +183,7 @@ export default function ReportsPage() {
                 <Switch id="rep-mistakes" checked={settings.includeMistakes} onCheckedChange={(v) => update({ includeMistakes: v })} />
               </div>
               <p className="rounded-lg bg-secondary px-3 py-2 text-xs text-muted-foreground">
-                {settings.enabled ? `Next report: every ${settings.day} at ${settings.time}` : "Automatic reports are paused."} (Simulated — no emails are sent in Phase 1.)
+                {settings.enabled ? `Next report: every ${settings.day} at ${settings.time}` : "Automatic reports are paused."} ({db.viewer.timezone})
               </p>
             </CardContent>
           </Card>

@@ -12,7 +12,8 @@ import { KpiCard } from "@/components/parent/kpi-card";
 import { ScoreTrendChart } from "@/components/charts/score-trend-chart";
 import { TopicRadar } from "@/components/charts/topic-radar";
 import { useAssignments, useWholeDB } from "@/hooks/use-data";
-import { reportService } from "@/lib/services";
+import { useDashboard } from "@/hooks/use-dashboard";
+import { reportService } from "@/lib/client";
 import { topicName } from "@/lib/mock-data/curriculum";
 import { cn, daysUntil, dueLabel, formatDate, pct } from "@/lib/utils";
 
@@ -30,6 +31,7 @@ const SHORT: Record<string, string> = {
 export default function ParentOverview() {
   const db = useWholeDB();
   const assignments = useAssignments();
+  const summary = useDashboard();
 
   const d = useMemo(() => {
     if (!db || !assignments) return null;
@@ -95,12 +97,12 @@ export default function ParentOverview() {
           </dl>
         </Card>
         <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
-          <KpiCard icon={ClipboardList} label="Total assignments" value={assignments!.length} sub={`${d.pending.length} open`} />
-          <KpiCard icon={CheckCircle2} label="Completion rate" value={`${d.completion}%`} sub={`${d.completed} submitted on time or late`} />
-          <KpiCard icon={Percent} label="Average marks" value={`${d.avg}%`} sub={`across ${d.evals.length} evaluations`} />
-          <KpiCard icon={Flame} label="Current streak" value={`${s.streak} days`} sub={`Best ${s.longestStreak} days`} />
-          <KpiCard icon={Clock} label="Study time this week" value={`${d.week.studyMinutes} min`} sub={`${d.week.studyDays} study days`} />
-          <KpiCard icon={GraduationCap} label="Topics mastered" value={`${db.topicProgress.filter((t) => t.mastery >= 80).length}/8`} sub="80%+ mastery" />
+          <KpiCard icon={ClipboardList} label="Total assignments" value={summary?.totalAssignments ?? assignments!.length} sub={`${d.pending.length} open`} />
+          <KpiCard icon={CheckCircle2} label="Completion rate" value={`${summary?.completionRate ?? d.completion}%`} sub="of assignments due so far" />
+          <KpiCard icon={Percent} label="Average marks" value={`${summary?.averageScore ?? d.avg}%`} sub={summary && summary.improvementPercent !== 0 ? `${summary.improvementPercent > 0 ? "+" : ""}${summary.improvementPercent} pts improvement` : `across ${d.evals.length} evaluations`} />
+          <KpiCard icon={Flame} label="Current streak" value={`${summary?.currentStreak ?? s.streak} days`} sub={`Best ${summary?.longestStreak ?? s.longestStreak} days`} />
+          <KpiCard icon={Clock} label="Study time this week" value={`${summary?.weeklyStudyMinutes ?? d.week.studyMinutes} min`} sub={`${summary?.weeklyStudyDays ?? d.week.studyDays} study days`} />
+          <KpiCard icon={GraduationCap} label="Topics mastered" value={`${db.topicProgress.filter((t) => t.masteryLevel === "MASTERED").length}/${db.topicProgress.length}`} sub={`${summary?.correctedMistakes ?? s.mistakesCorrected} mistakes corrected`} />
         </div>
       </div>
 
@@ -212,7 +214,7 @@ export default function ParentOverview() {
           </div>
           <div>
             <p className="mb-2 flex items-center gap-1.5 text-sm font-semibold"><Repeat className="h-4 w-4 text-sun-dark" /> Repeated mistakes</p>
-            {d.repeated.length ? d.repeated.map(([k, n]) => (
+            {(summary ? summary.repeatedMistakes.map((r) => [r.kind, r.count] as const) : d.repeated).length ? (summary ? summary.repeatedMistakes.map((r) => [r.kind, r.count] as const) : d.repeated).map(([k, n]) => (
               <div key={k} className="mb-1.5 flex justify-between rounded-lg bg-sun-light/60 px-3 py-2 text-sm"><span>{ERROR_NAMES[k] ?? k}</span><b>{n}×</b></div>
             )) : <p className="text-sm text-muted-foreground">No repeated patterns.</p>}
           </div>
@@ -237,6 +239,23 @@ export default function ParentOverview() {
           </div>
         </CardContent>
       </Card>
+      {summary && summary.recommendations.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Recommended focus</CardTitle>
+            <p className="text-sm text-muted-foreground">Why each topic is suggested, based on recent results</p>
+          </CardHeader>
+          <CardContent className="grid gap-3 md:grid-cols-3">
+            {summary.recommendations.map((r) => (
+              <div key={r.topicName} className="rounded-xl border bg-paper p-3 text-sm">
+                <p className="font-semibold">{r.topicName}</p>
+                <p className="mt-1 text-muted-foreground">{r.reason}</p>
+                <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-indigo-400">Suggested level: {r.difficulty.toLowerCase()}</p>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

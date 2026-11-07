@@ -9,9 +9,12 @@ import { PageSkeleton } from "@/components/shared/states";
 import { Mascot } from "@/components/shared/mascot";
 import { AchievementBadge } from "@/components/rewards/achievement-badge";
 import { useAchievements, useLevel, useRewards, useScoreStats, useStudent, useXPEvents } from "@/hooks/use-data";
-import { rewardService } from "@/lib/services";
-import { TRIGGER_LABELS } from "@/lib/services/rewards.service";
+import { rewardService } from "@/lib/client";
+import { TRIGGER_LABELS } from "@/lib/client/rewards.service";
 import { cn, relativeTime } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
+import { errorMessage } from "@/lib/client/api";
 
 export default function RewardsPage() {
   const student = useStudent();
@@ -130,7 +133,24 @@ export default function RewardsPage() {
                   {r.status === "delivered" ? (
                     <span className="flex items-center gap-1 text-xs font-bold text-mint-dark"><PackageCheck className="h-4 w-4" /> Received</span>
                   ) : r.status === "unlocked" ? (
-                    <span className="rounded-full bg-sun px-2 py-0.5 text-xs font-bold text-indigo">Unlocked!</span>
+                    <Button
+                      size="sm"
+                      variant="sun"
+                      onClick={async () => {
+                        try {
+                          await rewardService.requestReward(r.id);
+                          toast.success("Request sent!", { description: "Mumma or Papa will see it in their dashboard." });
+                        } catch (e) {
+                          toast.error(errorMessage(e));
+                        }
+                      }}
+                    >
+                      Ask for it
+                    </Button>
+                  ) : r.status === "requested" ? (
+                    <span className="rounded-full bg-lavender px-2 py-0.5 text-xs font-bold text-indigo">Requested</span>
+                  ) : r.status === "approved" ? (
+                    <span className="rounded-full bg-mint px-2 py-0.5 text-xs font-bold text-mint-dark">Approved!</span>
                   ) : (
                     <Lock className="h-4 w-4 text-indigo-300" aria-label="Locked" />
                   )}

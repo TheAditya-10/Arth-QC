@@ -5,10 +5,12 @@ import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { Award, BarChart3, ClipboardList, FileText, Inbox, LayoutDashboard, Menu, Settings } from "lucide-react";
 import { Logo } from "@/components/shared/logo";
+import { StateGate } from "@/components/shared/state-gate";
 import { RoleSwitcher } from "@/components/shared/role-switcher";
 import { Dialog, DialogTitle, SheetContent } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { useStudent, useSubmissions, useUsers } from "@/hooks/use-data";
+import { useStore } from "@/lib/client/store";
 import { cn, initials } from "@/lib/utils";
 
 export const PARENT_NAV = [
@@ -24,7 +26,7 @@ export const PARENT_NAV = [
 function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
   const submissions = useSubmissions();
-  const toReview = submissions?.filter((s) => s.status === "evaluated").length ?? 0;
+  const toReview = submissions?.filter((s) => s.status === "needs_review" || s.status === "failed").length ?? 0;
   return (
     <nav className="space-y-0.5" aria-label="Parent navigation">
       {PARENT_NAV.map((item) => {
@@ -55,7 +57,8 @@ export function ParentShell({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const student = useStudent();
   const users = useUsers();
-  const parent = users?.find((u) => u.id === "parent_1");
+  const viewerId = useStore((db) => db.viewer.userId);
+  const parent = users?.find((u) => u.id === viewerId);
 
   const studentCard = (
     <div className="rounded-xl border bg-paper p-3">
@@ -100,7 +103,7 @@ export function ParentShell({ children }: { children: React.ReactNode }) {
           </div>
           <RoleSwitcher current="parent" />
         </header>
-        <main className="mx-auto max-w-7xl px-4 py-6 lg:px-8 lg:py-8">{children}</main>
+        <main className="mx-auto max-w-7xl px-4 py-6 lg:px-8 lg:py-8"><StateGate>{children}</StateGate></main>
       </div>
 
       <Dialog open={open} onOpenChange={setOpen}>

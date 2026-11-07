@@ -64,6 +64,7 @@ export interface Question {
   expectedAnswer: string;
   /** Optional marking scheme hints, per step */
   markingSteps?: { description: string; marks: number }[];
+  expectedSolution?: string;
 }
 
 export type AssignmentStatus = "pending" | "in_progress" | "submitted" | "evaluated" | "overdue";
@@ -87,6 +88,7 @@ export interface Assignment {
   markingScheme?: string;
   referenceFileName?: string;
   status: AssignmentStatus;
+  attachments?: { id: ID; name: string; url: string }[];
   /** 0-100, used for "continue learning" */
   progress?: number;
 }
@@ -102,7 +104,7 @@ export interface UploadedFile {
   previewUrl: string;
 }
 
-export type EvaluationStatus = "processing" | "evaluated" | "reviewed" | "failed";
+export type EvaluationStatus = "processing" | "evaluated" | "reviewed" | "failed" | "needs_review";
 
 export interface Submission {
   id: ID;
@@ -113,11 +115,15 @@ export interface Submission {
   notes?: string;
   status: EvaluationStatus;
   evaluationId?: ID;
+  /** Backend pipeline status (UPLOADED … COMPLETED). */
+  rawStatus?: string;
+  /** Last processing error (parents only). */
+  jobError?: string;
 }
 
 export type ResultStatus = "correct" | "incorrect" | "partial";
 
-export type ErrorKind = "conceptual" | "calculation" | "incomplete" | "notation";
+export type ErrorKind = "conceptual" | "calculation" | "incomplete" | "notation" | "method" | "misread";
 
 export interface StepMark {
   description: string;
@@ -126,8 +132,25 @@ export interface StepMark {
   ok: boolean;
 }
 
+export interface QuestionFeedbackDetail {
+  whatWentWrong: string;
+  whyIncorrect: string;
+  correctApproach: string;
+  howToAvoid: string;
+  example: string;
+}
+
 export interface QuestionResult {
   questionId: ID;
+  /** Server id used for parent corrections. */
+  questionEvaluationId?: ID;
+  /** Marks originally given by the AI (unchanged by corrections). */
+  aiMarks?: number;
+  needsReview?: boolean;
+  confidence?: number;
+  feedback?: QuestionFeedbackDetail | null;
+  recommendedPractice?: string[];
+  verificationNote?: string;
   number: number;
   question: string;
   studentAnswer: string;
@@ -155,6 +178,12 @@ export interface Evaluation {
   summary: string;
   /** set when a parent manually adjusts marks */
   parentOverride?: { score: number; note: string; at: ISODate; originalScore: number };
+  needsReview?: boolean;
+  reviewReasons?: string[];
+  confidence?: number;
+  model?: string;
+  promptVersion?: string;
+  corrections?: { questionNumber: number; previousMarks: number; newMarks: number; reason: string; at: ISODate; by: string }[];
 }
 
 export interface TopicProgress {
@@ -164,6 +193,7 @@ export interface TopicProgress {
   mastery: number; // 0-100
   attempts: number;
   trend: "up" | "down" | "flat";
+  masteryLevel?: "NOT_STARTED" | "LEARNING" | "IMPROVING" | "PROFICIENT" | "MASTERED";
 }
 
 export type AchievementCategory = "consistency" | "improvement" | "accuracy" | "mastery" | "milestone";
@@ -183,7 +213,7 @@ export interface Achievement {
 
 export type RewardTrigger = "streak" | "xp" | "score" | "improvement" | "custom";
 
-export type RewardStatus = "locked" | "unlocked" | "delivered";
+export type RewardStatus = "locked" | "unlocked" | "requested" | "approved" | "delivered";
 
 export interface Reward {
   id: ID;
@@ -197,6 +227,9 @@ export interface Reward {
   createdBy: ID;
   unlockedAt?: ISODate;
   deliveredAt?: ISODate;
+  /** 0-100 progress toward the threshold (server-computed). */
+  progress?: number;
+  requestedAt?: ISODate;
 }
 
 export interface XPEvent {
@@ -286,6 +319,7 @@ export interface PracticeResult {
   total: number;
   xpEarned: number;
   completedAt: ISODate;
+  title?: string;
 }
 
 export interface ChatMessage {
@@ -298,4 +332,34 @@ export interface ChatMessage {
 export interface PerformancePoint {
   label: string;
   score: number;
+}
+
+export interface Viewer {
+  userId: ID;
+  role: Role;
+  name: string;
+  email: string;
+  familyId: ID;
+  familyName: string;
+  timezone: string;
+  students: { id: ID; name: string; grade: number; username: string | null }[];
+  activeStudentId: ID;
+}
+
+export interface LearningRecommendation {
+  topicId: string;
+  topicName: string;
+  difficulty: Difficulty;
+  reason: string;
+}
+
+export interface ReportHistoryItem extends WeeklyReport {
+  status: "GENERATED" | "SENT" | "PARTIAL" | "FAILED";
+  deliveries: { email: string; status: "QUEUED" | "SENT" | "FAILED" | "SKIPPED"; error: string | null; sentAt: ISODate | null; attempts: number }[];
+}
+
+export interface PendingInvitation {
+  id: ID;
+  email: string;
+  expiresAt: ISODate;
 }

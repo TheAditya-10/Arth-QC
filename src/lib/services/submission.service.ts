@@ -1,241 +1,186 @@
-"use client";
+import "server-only";
+import { and, count, eq, inArray, isNull } from "drizzle-orm";
+import { z } from "zod";
+import { db, schema } from "@/lib/db";
+import { AppError, conflict, notFound } from "@/lib/security/errors";
+import { assertStudentAccess, type Actor } from "@/lib/security/actor";
+import { MAX_FILES_PER_SUBMISSION, deleteObjects } from "@/lib/storage/upload.service";
+import { enqueueEvaluation, requeueEvaluation } from "./evaluation.service";
+import { afterProgress, awardXp, familyContext, scoreBonusRule, pct } from "./gamification";
+import { audit } from "./audit.service";
 
-import type { Assignment, ErrorKind, Evaluation, QuestionResult, ResultStatus, Submission, UploadedFile } from "@/types";
-import { pct, sleep, uid } from "@/lib/utils";
-import { xpForEvaluation } from "@/lib/utils/gamification";
-import { topicName } from "@/lib/mock-data/curriculum";
-import { PRACTICE_BANK } from "@/lib/mock-data/practice-bank";
-import { getDB, setDB } from "./store";
-import { applyProgress, awardXP, markStudied, updateTopic } from "./progress-engine";
+export const MAX_ATTEMPTS_PER_ASSIGNMENT = 3;
 
-export const EVALUATION_STAGES = [
-  { key: "reading", label: "Reading handwriting", detail: "Scanning your notebook pages…" },
-  { key: "identifying", label: "Identifying questions", detail: "Matching answers to each question…" },
-  { key: "checking", label: "Checking mathematical steps", detail: "Looking at every step of your working…" },
-  { key: "feedback", label: "Preparing feedback", detail: "Writing friendly tips just for you…" },
-] as const;
-
-/** deterministic pseudo-random from a string seed */
-function rng(seed: string) {
-  let h = 2166136261;
-  for (let i = 0; i < seed.length; i++) h = Math.imul(h ^ seed.charCodeAt(i), 16777619);
-  return () => {
-    h = Math.imul(h ^ (h >>> 15), 2246822507);
-    h = Math.imul(h ^ (h >>> 13), 3266489909);
-    return ((h ^= h >>> 16) >>> 0) / 4294967296;
-  };
-}
-
-const ERROR_LIBRARY: Record<Exclude<ResultStatus, "correct">, { kind: ErrorKind; description: string; explanation: string }[]> = {
-  partial: [
-    { kind: "calculation", description: "A small calculation slip in the last step.", explanation: "Your method is right! Re-check the final calculation slowly, one digit at a time." },
-    { kind: "incomplete", description: "The working stops before the final answer.", explanation: "You were on the right track. Finish the last step and write the final answer clearly." },
-    { kind: "notation", description: "The answer is missing units or proper notation.", explanation: "The number is correct — remember to write units or symbols so it is complete." },
-  ],
-  incorrect: [
-    { kind: "conceptual", description: "The idea used does not match what the question asks.", explanation: "Read the question again and underline the key words. Which concept is it asking about? Try the hint in practice mode." },
-    { kind: "calculation", description: "Several calculation errors changed the answer.", explanation: "Write each step on a new line so it is easy to spot mistakes. Check each operation again." },
-  ],
-};
-
-function mockEvaluate(assignment: Assignment, submissionId: string): Evaluation {
-  const rand = rng(submissionId + assignment.id);
-  const results: QuestionResult[] = assignment.questions.map((q) => {
-    const r = rand();
-    const status: ResultStatus = r < 0.6 ? "correct" : r < 0.88 ? "partial" : "incorrect";
-    if (status === "correct") {
-      return {
-        questionId: q.id,
-        number: q.number,
-        question: q.text,
-        expectedAnswer: q.expectedAnswer,
-        studentAnswer: q.expectedAnswer,
-        maxMarks: q.marks,
-        marksAwarded: q.marks,
-        status,
-        steps: [
-          { description: "Correct method", awarded: Math.ceil(q.marks / 2), max: Math.ceil(q.marks / 2), ok: true },
-          { description: "Correct final answer", awarded: Math.floor(q.marks / 2), max: Math.floor(q.marks / 2), ok: true },
-        ],
-        errors: [],
-        explanation: "Well done! Your working is clear and the answer is correct.",
-      };
-    }
-    const lib = ERROR_LIBRARY[status];
-    const err = lib[Math.floor(rand() * lib.length)];
-    const methodMax = Math.ceil(q.marks / 2);
-    const answerMax = Math.floor(q.marks / 2);
-    const methodAwarded = status === "partial" ? methodMax : Math.min(1, methodMax);
-    const answerAwarded = status === "partial" && err.kind === "notation" ? Math.max(0, answerMax - 1) : 0;
-    return {
-      questionId: q.id,
-      number: q.number,
-      question: q.text,
-      expectedAnswer: q.expectedAnswer,
-      studentAnswer: status === "partial" ? `${q.expectedAnswer.split(/[;=]/)[0]} … (incomplete)` : "Answer could not be matched",
-      maxMarks: q.marks,
-      marksAwarded: methodAwarded + answerAwarded,
-      status,
-      steps: [
-        { description: "Method / approach", awarded: methodAwarded, max: methodMax, ok: methodAwarded === methodMax },
-        { description: "Final answer", awarded: answerAwarded, max: answerMax, ok: answerAwarded === answerMax },
-      ],
-      errors: [{ kind: err.kind, description: err.description }],
-      explanation: err.explanation,
-    };
-  });
-  const score = results.reduce((s, r) => s + r.marksAwarded, 0);
-  const p = pct(score, assignment.maxMarks);
-  const topic = topicName(assignment.topicId);
-  const weak = results.filter((r) => r.status !== "correct");
-  return {
-    id: uid("e"),
-    submissionId,
-    assignmentId: assignment.id,
-    score,
-    maxScore: assignment.maxMarks,
-    xpEarned: xpForEvaluation(p),
-    evaluatedAt: new Date().toISOString(),
-    results,
-    summary:
-      weak.length === 0
-        ? `Every answer is correct — you have a strong grip on ${topic}!`
-        : `Nice work on ${topic}. ${weak.length} question${weak.length > 1 ? "s need" : " needs"} another look — check the tips below.`,
-    strengths: [`${topic}: core method`, ...(p >= 70 ? ["Neat, step-by-step working"] : [])],
-    needsAttention: weak.length ? weak.map((w) => `Question ${w.number}: ${w.errors[0]?.description ?? "Review"}`) : [],
-    suggestedPractice: PRACTICE_BANK.filter((x) => x.topicId === assignment.topicId)
-      .slice(0, 3)
-      .map((x) => x.text),
-  };
-}
-
-export interface SubmitHomeworkInput {
-  assignmentId: string;
-  files: UploadedFile[];
-  notes?: string;
-  topicId?: string;
-}
-
-/** Step 1: upload. Calls onProgress with 0..100. */
-export async function uploadFiles(files: UploadedFile[], onProgress: (p: number) => void): Promise<void> {
-  const steps = 12 + files.length * 2;
-  for (let i = 1; i <= steps; i++) {
-    await sleep(90);
-    onProgress(Math.round((i / steps) * 100));
-  }
-}
-
-/** Step 2: create the submission record (status = processing). */
-export async function createSubmission(input: SubmitHomeworkInput): Promise<Submission> {
-  await sleep(300);
-  const submission: Submission = {
-    id: uid("s"),
-    assignmentId: input.assignmentId,
-    studentId: getDB().student.id,
-    submittedAt: new Date().toISOString(),
-    files: input.files,
-    notes: input.notes,
-    status: "processing",
-  };
-  setDB((db) => ({
-    ...db,
-    submissions: [submission, ...db.submissions],
-    assignments: db.assignments.map((a) =>
-      a.id === input.assignmentId
-        ? { ...a, status: "submitted", progress: 100, topicId: input.topicId || a.topicId }
-        : a,
-    ),
-  }));
-  return submission;
-}
+export const createSubmissionSchema = z.object({
+  assignmentId: z.string().uuid(),
+  uploadIds: z.array(z.string().uuid()).min(1).max(MAX_FILES_PER_SUBMISSION),
+  notes: z.string().trim().max(300).optional(),
+  idempotencyKey: z.string().min(16).max(100),
+});
 
 /**
- * Step 3: simulated AI evaluation, reporting each stage.
- * Phase 2: replace with a server action that calls Gemini and streams progress.
+ * Finalises a homework submission and queues it for evaluation. Files are only sent
+ * to the AI after this point. Retried requests (same idempotency key) return the
+ * original submission instead of creating a duplicate.
  */
-export async function evaluateSubmission(
-  submissionId: string,
-  onStage: (index: number) => void,
-): Promise<Evaluation> {
-  for (let i = 0; i < EVALUATION_STAGES.length; i++) {
-    onStage(i);
-    await sleep(1300 + i * 250);
+export async function createSubmission(actor: Actor & { studentProfileId: string }, input: z.infer<typeof createSubmissionSchema>) {
+  const d = db();
+  const [existing] = await d.select().from(schema.submissions).where(eq(schema.submissions.idempotencyKey, input.idempotencyKey));
+  if (existing) {
+    if (existing.studentProfileId !== actor.studentProfileId) throw conflict("Duplicate request key.");
+    const [job] = await d.select({ id: schema.evaluationJobs.id }).from(schema.evaluationJobs).where(eq(schema.evaluationJobs.submissionId, existing.id));
+    return { submissionId: existing.id, jobId: job?.id ?? null, duplicate: true };
   }
-  const db = getDB();
-  const submission = db.submissions.find((s) => s.id === submissionId);
-  const assignment = submission && db.assignments.find((a) => a.id === submission.assignmentId);
-  if (!submission || !assignment) throw new Error("Submission not found");
-  const evaluation = mockEvaluate(assignment, submissionId);
-  setDB((d) => {
-    let next: typeof d = {
-      ...d,
-      evaluations: [evaluation, ...d.evaluations],
-      submissions: d.submissions.map((s) =>
-        s.id === submissionId ? { ...s, status: "evaluated", evaluationId: evaluation.id } : s,
-      ),
-      assignments: d.assignments.map((a) => (a.id === assignment.id ? { ...a, status: "evaluated" } : a)),
-    };
-    next = markStudied(next, assignment.estimatedMinutes);
-    next = awardXP(next, evaluation.xpEarned, `${assignment.title} evaluated`, "assignment");
-    next = updateTopic(next, assignment.topicId, pct(evaluation.score, evaluation.maxScore), 0.4);
-    return applyProgress(next);
-  });
-  onStage(EVALUATION_STAGES.length);
-  return evaluation;
-}
 
-/** Parent manual correction of marks for individual questions. */
-export async function overrideEvaluation(
-  evaluationId: string,
-  marks: Record<string, number>,
-  note: string,
-): Promise<Evaluation> {
-  await sleep(600);
-  let updated: Evaluation | undefined;
-  setDB((db) => {
-    const evaluations = db.evaluations.map((e) => {
-      if (e.id !== evaluationId) return e;
-      const results = e.results.map((r) => {
-        const m = marks[r.questionId];
-        if (m === undefined || m === r.marksAwarded) return r;
-        const status: ResultStatus = m >= r.maxMarks ? "correct" : m <= 0 ? "incorrect" : "partial";
-        return { ...r, marksAwarded: m, status };
-      });
-      const score = results.reduce((s, r) => s + r.marksAwarded, 0);
-      updated = { ...e, results, score, parentOverride: { score, note, at: new Date().toISOString(), originalScore: e.parentOverride?.originalScore ?? e.score } };
-      return updated;
-    });
-    const submissions = db.submissions.map((s) =>
-      s.evaluationId === evaluationId ? { ...s, status: "reviewed" as const } : s,
+  const [a] = await d
+    .select()
+    .from(schema.assignments)
+    .where(and(eq(schema.assignments.id, input.assignmentId), isNull(schema.assignments.deletedAt), eq(schema.assignments.status, "PUBLISHED")));
+  if (!a || a.studentProfileId !== actor.studentProfileId) throw notFound("Assignment");
+
+  const prior = await d
+    .select({ id: schema.submissions.id, status: schema.submissions.status })
+    .from(schema.submissions)
+    .where(and(eq(schema.submissions.assignmentId, a.id), eq(schema.submissions.studentProfileId, actor.studentProfileId), isNull(schema.submissions.deletedAt)));
+  if (prior.some((p) => !["COMPLETED", "NEEDS_REVIEW", "FAILED"].includes(p.status))) throw conflict("Your previous submission is still being checked.");
+  if (prior.length >= MAX_ATTEMPTS_PER_ASSIGNMENT) throw conflict("You've reached the maximum number of attempts for this assignment.");
+
+  const uploads = await d.select().from(schema.uploads).where(inArray(schema.uploads.id, input.uploadIds));
+  for (const id of input.uploadIds) {
+    const u = uploads.find((x) => x.id === id);
+    if (!u || u.ownerUserId !== actor.userId || u.purpose !== "SUBMISSION" || u.status !== "UPLOADED") {
+      throw new AppError("VALIDATION", "One of the files is missing or wasn't uploaded completely. Please re-add it.");
+    }
+  }
+
+  return d.transaction(async (tx) => {
+    const [{ n }] = await tx
+      .select({ n: count() })
+      .from(schema.submissions)
+      .where(and(eq(schema.submissions.assignmentId, a.id), eq(schema.submissions.studentProfileId, actor.studentProfileId)));
+    const [sub] = await tx
+      .insert(schema.submissions)
+      .values({
+        assignmentId: a.id,
+        studentProfileId: actor.studentProfileId,
+        familyId: actor.familyId,
+        attemptNumber: n + 1,
+        idempotencyKey: input.idempotencyKey,
+        notes: input.notes || null,
+        isLate: new Date() > a.dueAt,
+        status: "UPLOADED",
+      })
+      .returning();
+    await tx.insert(schema.submissionFiles).values(
+      input.uploadIds.map((id, i) => {
+        const u = uploads.find((x) => x.id === id)!;
+        return { submissionId: sub.id, uploadId: u.id, storageKey: u.storageKey, fileName: u.fileName, mimeType: u.mimeType, sizeBytes: u.sizeBytes ?? u.declaredSize, pageOrder: i + 1 };
+      }),
     );
-    return applyProgress({ ...db, evaluations, submissions });
+    await tx.update(schema.uploads).set({ status: "ATTACHED" }).where(inArray(schema.uploads.id, input.uploadIds));
+    const job = await enqueueEvaluation(tx, sub.id, 1);
+    return { submissionId: sub.id, jobId: job.id, duplicate: false };
   });
-  if (!updated) throw new Error("Evaluation not found");
-  return updated;
 }
 
-/** Downscale an image file into a compact JPEG data URL so it fits in localStorage. */
-export async function fileToPreview(file: File, maxSize = 900): Promise<string> {
-  if (!file.type.startsWith("image/")) return "";
-  const url = URL.createObjectURL(file);
-  try {
-    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const i = new Image();
-      i.onload = () => resolve(i);
-      i.onerror = reject;
-      i.src = url;
-    });
-    const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.round(img.width * scale);
-    canvas.height = Math.round(img.height * scale);
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return "";
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL("image/jpeg", 0.72);
-  } catch {
-    return "";
-  } finally {
-    URL.revokeObjectURL(url);
-  }
+async function loadSubmission(actor: Actor, id: string) {
+  const [s] = await db().select().from(schema.submissions).where(and(eq(schema.submissions.id, id), isNull(schema.submissions.deletedAt)));
+  if (!s || s.familyId !== actor.familyId) throw notFound("Submission");
+  await assertStudentAccess(actor, s.studentProfileId);
+  return s;
+}
+
+const STAGE_INDEX: Record<string, number> = { UPLOADED: 0, QUEUED: 0, PROCESSING: 0, EXTRACTING: 1, EVALUATING: 2, COMPLETED: 4, NEEDS_REVIEW: 4, FAILED: -1 };
+
+/** Lightweight status for the processing screen (polled). */
+export async function submissionStatus(actor: Actor, id: string) {
+  const s = await loadSubmission(actor, id);
+  const [job] = await db().select().from(schema.evaluationJobs).where(eq(schema.evaluationJobs.submissionId, id)).orderBy(schema.evaluationJobs.version);
+  return {
+    submissionId: s.id,
+    status: s.status,
+    stage: STAGE_INDEX[s.status] ?? 0,
+    done: ["COMPLETED", "NEEDS_REVIEW", "FAILED"].includes(s.status),
+    attempts: job?.attempts ?? 0,
+    retrying: s.status === "QUEUED" && (job?.attempts ?? 0) > 0,
+    nextRunAt: job?.nextRunAt?.toISOString() ?? null,
+    jobId: job?.id ?? null,
+    // Internal error details are only shown to parents.
+    error: actor.role === "PARENT" ? job?.lastError ?? null : null,
+  };
+}
+
+export const correctionSchema = z.object({
+  corrections: z
+    .array(z.object({ questionEvaluationId: z.string().uuid(), newMarks: z.coerce.number().min(0) }))
+    .max(50),
+  reason: z.string().trim().min(3, "Please give a reason for the correction").max(500),
+});
+
+/**
+ * Parent correction. AI marks (ai_marks / ai_score) are never modified; each change
+ * is recorded in evaluation_corrections with the reason.
+ */
+export async function correctEvaluation(actor: Actor, submissionId: string, input: z.infer<typeof correctionSchema>) {
+  const s = await loadSubmission(actor, submissionId);
+  const d = db();
+  const [ev] = await d.select().from(schema.evaluations).where(and(eq(schema.evaluations.submissionId, s.id), eq(schema.evaluations.isCurrent, true)));
+  if (!ev) throw notFound("Evaluation");
+  return d.transaction(async (tx) => {
+    const qes = await tx.select().from(schema.questionEvaluations).where(eq(schema.questionEvaluations.evaluationId, ev.id));
+    for (const c of input.corrections) {
+      const qe = qes.find((q) => q.id === c.questionEvaluationId);
+      if (!qe) throw notFound("Question");
+      if (c.newMarks > qe.maxMarks) throw new AppError("VALIDATION", `Marks for Q${qe.position} can't exceed ${qe.maxMarks}.`);
+      if (Math.abs(c.newMarks - qe.awardedMarks) < 0.001) continue;
+      await tx.insert(schema.evaluationCorrections).values({
+        evaluationId: ev.id,
+        questionEvaluationId: qe.id,
+        correctedBy: actor.userId,
+        previousMarks: qe.awardedMarks,
+        newMarks: c.newMarks,
+        reason: input.reason,
+      });
+      const result = c.newMarks >= qe.maxMarks ? "CORRECT" : c.newMarks <= 0 ? (qe.finalAnswerStatus === "MISSING" ? "UNANSWERED" : "INCORRECT") : "PARTIAL";
+      await tx.update(schema.questionEvaluations).set({ awardedMarks: c.newMarks, result, needsReview: false }).where(eq(schema.questionEvaluations.id, qe.id));
+      qe.awardedMarks = c.newMarks;
+    }
+    const score = Math.round(qes.reduce((sum, q) => sum + q.awardedMarks, 0) * 100) / 100;
+    await tx.update(schema.evaluations).set({ score, needsReview: false, reviewedAt: new Date(), reviewedBy: actor.userId }).where(eq(schema.evaluations.id, ev.id));
+    await tx.update(schema.submissions).set({ status: "COMPLETED" }).where(eq(schema.submissions.id, s.id));
+    await tx.update(schema.evaluationJobs).set({ status: "COMPLETED" }).where(and(eq(schema.evaluationJobs.submissionId, s.id), eq(schema.evaluationJobs.status, "NEEDS_REVIEW")));
+
+    // Score bonuses held back during review are released now (still idempotent per assignment).
+    const fam = await familyContext(tx, s.studentProfileId);
+    const [a] = await tx.select({ title: schema.assignments.title }).from(schema.assignments).where(eq(schema.assignments.id, s.assignmentId));
+    const bonus = scoreBonusRule(pct(score, ev.maxScore));
+    if (bonus) {
+      await awardXp(tx, { studentProfileId: s.studentProfileId, ruleKey: bonus, amount: fam.rules[bonus], sourceType: "assignment", sourceId: s.assignmentId, description: `Scored ${Math.round(pct(score, ev.maxScore))}% on ${a?.title ?? "homework"}` });
+    }
+    await afterProgress(tx, s.studentProfileId, fam.timezone);
+    await audit(tx, { familyId: actor.familyId, actorUserId: actor.userId, action: "evaluation.corrected", entityType: "evaluation", entityId: ev.id, details: { reason: input.reason, changes: input.corrections.length } });
+    return { score, maxScore: ev.maxScore };
+  });
+}
+
+/** Retry a failed evaluation, or re-evaluate a completed one as a new version. */
+export async function retryEvaluation(actor: Actor, submissionId: string, newVersion: boolean) {
+  const s = await loadSubmission(actor, submissionId);
+  if (!newVersion && s.status !== "FAILED") throw conflict("Only failed evaluations can be retried.");
+  const job = await requeueEvaluation(s.id, { newVersion });
+  await audit(db(), { familyId: actor.familyId, actorUserId: actor.userId, action: newVersion ? "evaluation.reevaluate" : "evaluation.retry", entityType: "submission", entityId: s.id });
+  return { jobId: job.id };
+}
+
+/** Deletes a submission and its stored notebook files (data retention). */
+export async function deleteSubmission(actor: Actor, submissionId: string) {
+  const s = await loadSubmission(actor, submissionId);
+  const d = db();
+  const files = await d.select({ key: schema.submissionFiles.storageKey, uploadId: schema.submissionFiles.uploadId }).from(schema.submissionFiles).where(eq(schema.submissionFiles.submissionId, s.id));
+  await d.transaction(async (tx) => {
+    await tx.update(schema.submissions).set({ deletedAt: new Date() }).where(eq(schema.submissions.id, s.id));
+    if (files.length) await tx.update(schema.uploads).set({ status: "DELETED" }).where(inArray(schema.uploads.id, files.map((f) => f.uploadId)));
+    await audit(tx, { familyId: actor.familyId, actorUserId: actor.userId, action: "submission.deleted", entityType: "submission", entityId: s.id });
+  });
+  await deleteObjects(files.map((f) => f.key));
 }
