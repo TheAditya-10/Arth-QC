@@ -95,10 +95,14 @@ export default function ProgressPage() {
         </CardHeader>
         <CardContent>
           <Tabs defaultValue="homework">
-            <TabsList>
-              <TabsTrigger value="homework">Each homework</TabsTrigger>
-              <TabsTrigger value="monthly">Last 5 weeks</TabsTrigger>
-              <TabsTrigger value="weekly">This week</TabsTrigger>
+            <TabsList className="grid w-full grid-cols-3 sm:inline-grid sm:w-auto">
+              <TabsTrigger value="homework" className="px-2 text-xs sm:px-3 sm:text-sm">
+                <span className="sm:hidden">Homework</span><span className="hidden sm:inline">Each homework</span>
+              </TabsTrigger>
+              <TabsTrigger value="monthly" className="px-2 text-xs sm:px-3 sm:text-sm">
+                <span className="sm:hidden">5 weeks</span><span className="hidden sm:inline">Last 5 weeks</span>
+              </TabsTrigger>
+              <TabsTrigger value="weekly" className="px-2 text-xs sm:px-3 sm:text-sm">This week</TabsTrigger>
             </TabsList>
             <TabsContent value="homework">
               <ScoreTrendChart data={data.homeworkTrend} height={240} />
