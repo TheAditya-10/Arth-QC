@@ -9,7 +9,7 @@ import { submissionService } from "@/lib/client";
 import { cn, formatBytes, uid } from "@/lib/utils";
 
 const MAX_FILES = 10;
-const MAX_IMAGE = 10 * 1024 * 1024;
+const MAX_IMAGE = 25 * 1024 * 1024; // large photos are downscaled before upload
 const MAX_PDF = 20 * 1024 * 1024;
 const ACCEPT = "image/png,image/jpeg,image/webp,application/pdf";
 const ALLOWED = ["image/png", "image/jpeg", "image/jpg", "image/webp", "application/pdf"];

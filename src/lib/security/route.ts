@@ -1,7 +1,7 @@
 import "server-only";
 import { NextResponse, type NextRequest } from "next/server";
 import type { ZodType, ZodTypeDef } from "zod";
-import { appUrl } from "@/lib/env";
+import { trustedOrigins } from "@/lib/env";
 import { AppError, toErrorBody } from "./errors";
 
 type Ctx<P> = { params: Promise<P> };
@@ -29,7 +29,7 @@ function assertSameOrigin(req: NextRequest) {
   // Cron/worker requests authenticate with a bearer secret instead.
   if (req.headers.get("authorization")?.startsWith("Bearer ")) return;
   const origin = req.headers.get("origin");
-  const allowed = new Set([new URL(appUrl()).origin, req.nextUrl.origin]);
+  const allowed = new Set(trustedOrigins());
   if (!origin || !allowed.has(origin)) throw new AppError("FORBIDDEN", "Cross-site request blocked.");
 }
 

@@ -6,7 +6,7 @@ import { nextCookies } from "better-auth/next-js";
 import { APIError, createAuthMiddleware } from "better-auth/api";
 import { eq, sql } from "drizzle-orm";
 import { db, schema } from "@/lib/db";
-import { appUrl, env } from "@/lib/env";
+import { appUrl, env, trustedOrigins } from "@/lib/env";
 
 /** Lockout policy. Students use short PINs, so they get a stricter limit. */
 export const LOCKOUT = {
@@ -51,7 +51,7 @@ function createAuth() {
       useSecureCookies: e.NODE_ENV === "production",
       cookiePrefix: "arthqc",
     },
-    trustedOrigins: [appUrl()],
+    trustedOrigins: trustedOrigins(),
     emailAndPassword: {
       enabled: true,
       // Student PINs are 6+ digits; parent password strength is enforced by our own Zod schema.

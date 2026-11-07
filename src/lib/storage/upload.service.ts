@@ -6,7 +6,13 @@ import { db, schema } from "@/lib/db";
 import { env } from "@/lib/env";
 import { AppError, forbidden, notFound } from "@/lib/security/errors";
 import type { Actor } from "@/lib/security/actor";
-import { storage } from ".";
+import { storage, storageDriverName } from ".";
+import { DB_DRIVER_MAX_BYTES } from "./db.driver";
+
+/** Per-file limit for this deployment (the DB driver is capped by Vercel's request size). */
+export function uploadLimit(mime: AllowedMime) {
+  return storageDriverName() === "db" ? Math.min(UPLOAD_LIMITS[mime], DB_DRIVER_MAX_BYTES) : UPLOAD_LIMITS[mime];
+}
 
 export const UPLOAD_LIMITS = {
   "image/jpeg": 10 * 1024 * 1024,
@@ -39,7 +45,7 @@ export function sniffMime(bytes: Uint8Array): AllowedMime | null {
 export async function requestUpload(actor: Actor, input: z.infer<typeof uploadRequestSchema>) {
   if (input.purpose === "SUBMISSION" && actor.role !== "STUDENT") throw forbidden("Only students upload homework.");
   if (input.purpose === "ASSIGNMENT_ATTACHMENT" && actor.role !== "PARENT") throw forbidden("Only parents upload worksheets.");
-  const limit = UPLOAD_LIMITS[input.mimeType];
+  const limit = uploadLimit(input.mimeType);
   if (input.size > limit) throw new AppError("VALIDATION", `File is too large (max ${Math.round(limit / 1048576)} MB).`);
   const d = db();
   const [{ n }] = await d
@@ -82,7 +88,7 @@ export async function completeUpload(actor: Actor, uploadId: string) {
     await d.update(schema.uploads).set({ status: "DELETED" }).where(eq(schema.uploads.id, u.id));
     throw new AppError("VALIDATION", msg);
   };
-  if (head.size !== u.declaredSize || head.size > UPLOAD_LIMITS[u.mimeType as AllowedMime]) await reject("The uploaded file size doesn't match.");
+  if (head.size !== u.declaredSize || head.size > uploadLimit(u.mimeType as AllowedMime)) await reject("The uploaded file size doesn't match.");
   const sniffed = sniffMime(await s.getBytes(u.storageKey, { start: 0, end: 15 }));
   if (sniffed !== u.mimeType) await reject("That file doesn't look like a valid image or PDF.");
   await d.update(schema.uploads).set({ status: "UPLOADED", sizeBytes: head.size, verifiedAt: new Date() }).where(eq(schema.uploads.id, u.id));

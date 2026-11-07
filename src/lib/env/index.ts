@@ -17,13 +17,20 @@ const schema = z.object({
   GEMINI_MODEL_EXTRACTION: z.string().default("gemini-2.5-flash"),
   GEMINI_MODEL_FAST: z.string().default("gemini-2.5-flash-lite"),
   // Storage
-  STORAGE_DRIVER: z.enum(["r2", "local"]).optional(),
+  STORAGE_DRIVER: z.enum(["r2", "db", "local"]).optional(),
   R2_ACCOUNT_ID: z.string().optional(),
   R2_ACCESS_KEY_ID: z.string().optional(),
   R2_SECRET_ACCESS_KEY: z.string().optional(),
   R2_BUCKET: z.string().optional(),
   // Email
   RESEND_API_KEY: z.string().optional(),
+  // SMTP (takes priority over Resend when SMTP_HOST is set)
+  SMTP_HOST: z.string().optional(),
+  SMTP_PORT: z.coerce.number().int().positive().default(587),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
+  /** "true" for implicit TLS (port 465); otherwise STARTTLS is used when offered. */
+  SMTP_SECURE: z.enum(["true", "false"]).optional(),
   EMAIL_FROM: z.string().default("Arth-QC <reports@example.com>"),
   // Cron / workers
   CRON_SECRET: z.string().optional(),
@@ -43,7 +50,14 @@ export function env(): Env {
 }
 
 export function appUrl(): string {
-  return env().APP_URL ?? process.env.VERCEL_PROJECT_PRODUCTION_URL?.replace(/^/, "https://") ?? "http://localhost:3000";
+  const v = process.env.VERCEL_PROJECT_PRODUCTION_URL;
+  return (env().APP_URL ?? (v ? `https://${v}` : "http://localhost:3000")).replace(/\/$/, "");
+}
+
+/** Every origin this deployment may legitimately be served from (production, preview, branch URLs). */
+export function trustedOrigins(): string[] {
+  const hosts = [process.env.VERCEL_URL, process.env.VERCEL_BRANCH_URL, process.env.VERCEL_PROJECT_PRODUCTION_URL].filter(Boolean).map((h) => `https://${h}`);
+  return [...new Set([new URL(appUrl()).origin, ...hosts])];
 }
 
 export function requireEnv<K extends keyof Env>(key: K): NonNullable<Env[K]> {

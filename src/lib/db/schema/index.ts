@@ -6,3 +6,4 @@ export * from "./submission";
 export * from "./learning";
 export * from "./gamification";
 export * from "./reports";
+export * from "./storage";

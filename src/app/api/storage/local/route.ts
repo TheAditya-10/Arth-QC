@@ -1,12 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { readFile } from "node:fs/promises";
 import { env } from "@/lib/env";
+import { storageDriverName } from "@/lib/storage";
 import { localPath, verifyLocalToken, writeLocal } from "@/lib/storage/local.driver";
 
 /** Development stand-in for R2 presigned URLs. Disabled when R2 is the active driver. */
 function enabled() {
-  const e = env();
-  return (e.STORAGE_DRIVER ?? (e.R2_BUCKET ? "r2" : "local")) === "local" && (e.NODE_ENV !== "production" || process.env.ALLOW_LOCAL_STORAGE);
+  return storageDriverName() === "local" && (env().NODE_ENV !== "production" || Boolean(process.env.ALLOW_LOCAL_STORAGE));
 }
 
 export async function PUT(req: NextRequest) {

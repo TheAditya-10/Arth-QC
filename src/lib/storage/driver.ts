@@ -7,7 +7,7 @@ export interface PresignedPut {
 }
 
 export interface StorageDriver {
-  readonly name: "r2" | "local";
+  readonly name: "r2" | "db" | "local";
   presignPut(key: string, opts: { contentType: string; contentLength: number; expiresIn: number }): Promise<PresignedPut>;
   presignGet(key: string, opts: { expiresIn: number; downloadName?: string }): Promise<string>;
   head(key: string): Promise<{ size: number; contentType: string | null } | null>;

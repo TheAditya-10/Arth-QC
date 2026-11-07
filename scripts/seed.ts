@@ -158,6 +158,9 @@ async function seedDemo() {
       if (storage().name === "local") {
         const { writeLocal } = await import("@/lib/storage/local.driver");
         await writeLocal(key, png, "image/png");
+      } else if (storage().name === "db") {
+        const { writeDbObject } = await import("@/lib/storage/db.driver");
+        await writeDbObject(key, png, "image/png");
       } else {
         const res = await fetch(put.url, { method: "PUT", headers: put.headers, body: Buffer.from(png) });
         if (!res.ok) throw new Error(`upload failed ${res.status}`);
